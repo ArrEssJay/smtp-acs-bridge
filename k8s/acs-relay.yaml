@@ -1,0 +1,114 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: acs-relay-secrets
+  namespace: matrix
+  # IMPORTANT: Make sure this is the same namespace as your Matrix components.
+type: Opaque
+stringData:
+  # PASTE YOUR AZURE CONNECTION STRING HERE
+  ACS_CONNECTION_STRING: "endpoint=https://your-acs-resource.communication.azure.com/;accesskey=your-secret-key"
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: acs-smtp-relay-pdb
+  namespace: matrix
+spec:
+  # Do not evict the last pod, ensuring service is always available during voluntary disruptions
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: acs-smtp-relay
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: acs-smtp-relay
+  namespace: matrix
+  labels:
+    app: acs-smtp-relay
+spec:
+  # Run 2 replicas for high availability
+  replicas: 2
+  selector:
+    matchLabels:
+      app: acs-smtp-relay
+  template:
+    metadata:
+      labels:
+        app: acs-smtp-relay
+    spec:
+      # --- Pod Security Context: Harden the entire pod ---
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        sysctls:
+          - name: net.ipv4.ip_unprivileged_port_start
+            value: "0"
+      containers:
+        - name: relay
+          # IMPORTANT: Replace this with the path to your image in your own container registry.
+          image: yourregistry.azurecr.io/acs-smtp-relay:latest
+          imagePullPolicy: Always
+          ports:
+            - name: smtp
+              containerPort: 1025 # The port our Rust app listens on
+          # --- Liveness & Readiness Probes ---
+          readinessProbe:
+            tcpSocket:
+              port: smtp
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: smtp
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          env:
+            - name: RUST_LOG
+              value: "info"
+            - name: ACS_SENDER_ADDRESS
+              value: "DoNotReply@your-verified-domain.com"
+            - name: ACS_CONNECTION_STRING
+              valueFrom:
+                secretKeyRef:
+                  name: acs-relay-secrets
+                  key: ACS_CONNECTION_STRING
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          # --- Container Security Context: Harden the specific container ---
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          # Provide a writable volume for /tmp
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: acs-smtp-relay-svc
+  namespace: matrix
+spec:
+  selector:
+    app: acs-smtp-relay
+  ports:
+    - name: smtp
+      protocol: TCP
+      port: 25
+      targetPort: 1025
