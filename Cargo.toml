@@ -1,13 +1,17 @@
 [package]
 name = "acs-smtp-relay"
-version = "0.3.0"
+version = "1.0.0"
 edition = "2021"
 authors = ["Rowan Jones <rowan@impermanent.io>"]
 license = "MIT"
+description = "A simple, production-ready SMTP to Azure Communication Services (ACS) Email API relay."
+repository = "https://github.com/your-username/acs-smtp-relay" # TODO: Update this URL
+readme = "README.md"
+keywords = ["smtp", "azure", "acs", "relay", "email"]
 
 [dependencies]
 # Async runtime
-tokio = { version = "1.46.0", features = ["full"] }
+tokio = { version = "1.38", features = ["full"] }
 
 # Error Handling & Logging
 anyhow = "1.0"
@@ -18,32 +22,33 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 reqwest = { version = "0.12", features = ["json"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-dotenvy = "0.15"
-
-# Azure SDK for Email - handles authentication and API calls correctly
-azure_core = "0.25.0"
 
 # Email Parsing
 mail-parser = "0.11.0"
 
 # For async traits
 async-trait = "0.1"
-chrono = "0.4.41"
-base64 = "0.22.1"
-hmac = "0.12.1"
-sha2 = "0.10.9"
-url = "2.5.4"
 
-# Mocking library for tests (now optional dependency)
-mockall = { version = "0.13.1", optional = true }
+# Crates for HMAC-SHA256 Authentication
+chrono = "0.4"
+base64 = "0.22"
+hmac = "0.12"
+sha2 = "0.10"
+url = "2.5"
+
+# Optional dependency for mocking
+mockall = { version = "0.13", optional = true }
 
 [dev-dependencies]
 # Mocking HTTP servers for integration tests
 wiremock = "0.6"
 
-[features]
-mocks = ["dep:mockall"]
-
+# This section enables the `mocks` feature when running the `smtp_flow` integration test.
 [[test]]
 name = "smtp_flow"
+harness = true
 required-features = ["mocks"]
+
+[features]
+# This feature flag enables the `automock` attribute in our library code.
+mocks = ["dep:mockall"]

@@ -1,77 +1,70 @@
-apiVersion: v1
-kind: Secret
-metadata:
-  name: acs-relay-secrets
-  namespace: matrix
-  # IMPORTANT: Make sure this is the same namespace as your Matrix components.
-type: Opaque
-stringData:
-  # PASTE YOUR AZURE CONNECTION STRING HERE
-  ACS_CONNECTION_STRING: "endpoint=https://your-acs-resource.communication.azure.com/;accesskey=your-secret-key"
----
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: acs-smtp-relay-pdb
-  namespace: matrix
-spec:
-  # Do not evict the last pod, ensuring service is always available during voluntary disruptions
-  minAvailable: 1
-  selector:
-    matchLabels:
-      app: acs-smtp-relay
----
+# Generic Kubernetes Manifest for ACS SMTP Relay
+#
+# --- Instructions ---
+#
+# 1. Create the Namespace (if it doesn't exist already):
+#    kubectl create namespace my-namespace
+#
+# 2. Create the Secret for the Azure Connection String:
+#    Replace '...' with your actual connection string.
+#
+#    kubectl create secret generic acs-relay-secrets \
+#      --from-literal=ACS_CONNECTION_STRING='endpoint=https://...;accesskey=...' \
+#      -n my-namespace
+#
+# 3. Edit this file below:
+#    - Replace <YOUR_CONTAINER_IMAGE_PATH> with the full path to the image in your registry.
+#    - Replace <YOUR_SENDER_ADDRESS> with your verified "MailFrom" address from Azure.
+#
+# 4. Apply this Manifest to your Cluster:
+#    kubectl apply -f k8s/acs-relay.yaml -n my-namespace
+#
+# ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: acs-smtp-relay
-  namespace: matrix
   labels:
-    app: acs-smtp-relay
+    app.kubernetes.io/name: acs-smtp-relay
 spec:
-  # Run 2 replicas for high availability
   replicas: 2
   selector:
     matchLabels:
-      app: acs-smtp-relay
+      app.kubernetes.io/name: acs-smtp-relay
   template:
     metadata:
       labels:
-        app: acs-smtp-relay
+        app.kubernetes.io/name: acs-smtp-relay
     spec:
-      # --- Pod Security Context: Harden the entire pod ---
       securityContext:
         runAsNonRoot: true
         runAsUser: 65534
         runAsGroup: 65534
         fsGroup: 65534
-        sysctls:
-          - name: net.ipv4.ip_unprivileged_port_start
-            value: "0"
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: relay
-          # IMPORTANT: Replace this with the path to your image in your own container registry.
-          image: yourregistry.azurecr.io/acs-smtp-relay:latest
+          image: <YOUR_CONTAINER_IMAGE_PATH>
           imagePullPolicy: Always
           ports:
             - name: smtp
-              containerPort: 1025 # The port our Rust app listens on
-          # --- Liveness & Readiness Probes ---
-          readinessProbe:
-            tcpSocket:
-              port: smtp
-            initialDelaySeconds: 5
-            periodSeconds: 10
+              containerPort: 1025
           livenessProbe:
             tcpSocket:
               port: smtp
             initialDelaySeconds: 15
             periodSeconds: 20
+          readinessProbe:
+            tcpSocket:
+              port: smtp
+            initialDelaySeconds: 5
+            periodSeconds: 10
           env:
             - name: RUST_LOG
               value: "info"
             - name: ACS_SENDER_ADDRESS
-              value: "DoNotReply@your-verified-domain.com"
+              value: "<YOUR_SENDER_ADDRESS>"
             - name: ACS_CONNECTION_STRING
               valueFrom:
                 secretKeyRef:
@@ -84,14 +77,12 @@ spec:
             limits:
               cpu: 200m
               memory: 128Mi
-          # --- Container Security Context: Harden the specific container ---
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
               drop:
                 - ALL
             readOnlyRootFilesystem: true
-          # Provide a writable volume for /tmp
           volumeMounts:
             - name: tmp
               mountPath: /tmp
@@ -103,12 +94,23 @@ apiVersion: v1
 kind: Service
 metadata:
   name: acs-smtp-relay-svc
-  namespace: matrix
+  labels:
+    app.kubernetes.io/name: acs-smtp-relay
 spec:
   selector:
-    app: acs-smtp-relay
+    app.kubernetes.io/name: acs-smtp-relay
   ports:
     - name: smtp
       protocol: TCP
       port: 25
       targetPort: 1025
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: acs-smtp-relay-pdb
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: acs-smtp-relay
