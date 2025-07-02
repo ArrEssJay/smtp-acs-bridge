@@ -5,7 +5,7 @@ edition = "2021"
 authors = ["Rowan Jones <rowan@impermanent.io>"]
 license = "MIT"
 description = "A simple, production-ready SMTP to Azure Communication Services (ACS) Email API relay."
-repository = "https://github.com/your-username/acs-smtp-relay" # TODO: Update this URL
+repository = "https://github.com/ArrEssJay/smtp-acs-bridge"
 readme = "README.md"
 keywords = ["smtp", "azure", "acs", "relay", "email"]
 

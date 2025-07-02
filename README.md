@@ -1,7 +1,7 @@
 # Rust SMTP to Azure ACS Email Relay
 
-[![Rust CI](https://github.com/your-username/acs-smtp-relay/actions/workflows/rust.yml/badge.svg)](https://github.com/your-username/acs-smtp-relay/actions/workflows/rust.yml)
-[![Docker Build & Push](https://github.com/your-username/acs-smtp-relay/actions/workflows/docker.yml/badge.svg)](https://github.com/your-username/acs-smtp-relay/actions/workflows/docker.yml)
+[![Rust CI](https://github.com/ArrEssJay/smtp-acs-bridge/actions/workflows/rust.yml/badge.svg)](https://github.com/ArrEssJay/smtp-acs-bridge/actions/workflows/rust.yml)
+[![Docker Build & Push](https://github.com/ArrEssJay/smtp-acs-bridge/actions/workflows/docker.yml/badge.svg)](https://github.com/ArrEssJay/smtp-acs-bridge/actions/workflows/docker.yml)
 
 This service relays emails received via SMTP to the Azure Communication Services (ACS) Email REST API. It is designed to allow applications that can only send email via SMTP to integrate with the modern Azure API.
 
@@ -47,8 +47,8 @@ The images are multi-platform and support both **`linux/amd64`** and **`linux/ar
 
 The following image tags are available:
 
-- `ghcr.io/your-username/acs-smtp-relay:v1.0.0` (Replace with the specific version you need)
-- `ghcr.io/your-username/acs-smtp-relay:latest` (Tracks the `main` branch)
+- `ghcr.io/arressjay/smtp-acs-bridge:v1.0.0` (For a specific version)
+- `ghcr.io/arressjay/smtp-acs-bridge:latest` (Tracks the `main` branch)
 
 ### 2. Deploying to Kubernetes (Production)
 
@@ -72,7 +72,7 @@ kubectl create secret generic acs-relay-secrets \
 
 Edit the manifest file at `k8s/acs-relay.yaml`:
 
-- Replace `<YOUR_CONTAINER_IMAGE_PATH>` with the image path from GHCR (e.g., `ghcr.io/your-username/acs-smtp-relay:v1.0.0`).
+- Replace `<YOUR_CONTAINER_IMAGE_PATH>` with the image path from GHCR (e.g., `ghcr.io/arressjay/smtp-acs-bridge:v1.0.0`).
 - Replace `<YOUR_SENDER_ADDRESS>` with your verified "MailFrom" address from Azure.
 
 Then, apply the configured manifest to your cluster:
