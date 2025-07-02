@@ -41,7 +41,11 @@ pub struct AcsEmailRequest<'a> {
     recipients: AcsRecipients<'a>,
 }
 
+#[cfg(feature = "mocks")]
+use mockall::automock;
+
 /// A trait for sending emails, allowing for mock implementations in tests.
+#[cfg_attr(feature = "mocks", automock)]
 #[async_trait]
 pub trait Mailer: Send + Sync {
     async fn send(&self, raw_email: &[u8], recipients: &[String]) -> Result<()>;

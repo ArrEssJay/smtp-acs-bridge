@@ -34,6 +34,16 @@ hmac = "0.12.1"
 sha2 = "0.10.9"
 url = "2.5.4"
 
+# Mocking library for tests (now optional dependency)
+mockall = { version = "0.13.1", optional = true }
+
 [dev-dependencies]
-# Mocking library for tests
-mockall = "0.13.1"
+# Mocking HTTP servers for integration tests
+wiremock = "0.6"
+
+[features]
+mocks = ["dep:mockall"]
+
+[[test]]
+name = "smtp_flow"
+required-features = ["mocks"]
