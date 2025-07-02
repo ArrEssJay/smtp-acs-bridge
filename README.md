@@ -1,6 +1,5 @@
 # Rust SMTP to Azure ACS Email Relay
 
-[![Rust CI](https://github.com/ArrEssJay/smtp-acs-bridge/actions/workflows/rust.yml/badge.svg)](https://github.com/ArrEssJay/smtp-acs-bridge/actions/workflows/rust.yml)
 [![Docker Build & Push](https://github.com/ArrEssJay/smtp-acs-bridge/actions/workflows/docker.yml/badge.svg)](https://github.com/ArrEssJay/smtp-acs-bridge/actions/workflows/docker.yml)
 
 This service relays emails received via SMTP to the Azure Communication Services (ACS) Email REST API. It is designed to allow applications that can only send email via SMTP to integrate with the modern Azure API.
