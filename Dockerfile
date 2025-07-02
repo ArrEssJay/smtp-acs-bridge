@@ -1,6 +1,6 @@
 # ---- Builder Stage ----
 # Use a specific, recent, and slim base image for security and reproducibility.
-FROM rust:1-slim-bookworm AS builder
+FROM rust:1 AS builder
 
 # Update all system packages and install build-time dependencies needed for linking.
 RUN apt-get update && apt-get upgrade -y && apt-get install -y libssl-dev pkg-config && rm -rf /var/lib/apt/lists/*
@@ -10,12 +10,13 @@ WORKDIR /app
 # Copy over your manifests to cache dependencies.
 COPY Cargo.toml Cargo.lock ./
 
-# FIX: Create dummy files for BOTH the library and the binary targets.
-# This ensures that cargo build can compile the project structure
-# and correctly cache all dependencies from Cargo.lock.
+# FIX: Create dummy files for BOTH the library and the binary, and ensure
+# the dummy binary explicitly USES the dummy library. This creates a valid
+# dependency graph that cargo can compile successfully.
+# The crate name acs-smtp-relay is converted to acs_smtp_relay in code.
 RUN mkdir src \
     && echo "pub fn lib() {}" > src/lib.rs \
-    && echo "fn main() {}" > src/main.rs \
+    && echo "fn main() { acs_smtp_relay::lib(); }" > src/main.rs \
     && cargo build --release \
     && rm -rf src/
 
