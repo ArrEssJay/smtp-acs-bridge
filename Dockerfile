@@ -10,20 +10,20 @@ WORKDIR /app
 # Copy over your manifests to cache dependencies.
 COPY Cargo.toml Cargo.lock ./
 
-# FIX: Create a minimal, valid project structure to cache dependencies.
-# The dummy main.rs MUST use crate::lib() to correctly reference its own library.
-# The crate name acs-smtp-relay is converted to acs_smtp_relay in code,
-# but using the crate keyword is the canonical and correct way.
-RUN mkdir src && \
+# FIX: Create a complete dummy project structure that satisfies all targets
+# defined in Cargo.toml, including the integration test.
+RUN mkdir -p src tests && \
     echo "pub fn lib() {}" > src/lib.rs && \
     echo "fn main() { crate::lib(); }" > src/main.rs && \
-    cargo build --release && \
-    rm -rf src/
+    echo "#[test] fn an_empty_test() {}" > tests/smtp_flow.rs && \
+    cargo test --no-run --all-features && \
+    rm -rf src tests
 
-# Copy your actual source code.
+# Copy your actual source code. This will be much faster now.
 COPY src ./src
+COPY tests ./tests
 
-# Build the binary in release mode for performance.
+# Build the final release binary. This step will use the cached dependencies.
 RUN cargo build --release
 
 # ---- Runtime Stage ----
