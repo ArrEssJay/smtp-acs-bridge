@@ -1,18 +1,23 @@
 # ---- Builder Stage ----
-# Use the latest stable Rust version to mitigate known vulnerabilities.
-FROM rust:1 as builder
+# Use a specific, recent, and slim base image for security and reproducibility.
+FROM rust:1-slim-bookworm AS builder
 
 # Update all system packages and install build-time dependencies needed for linking.
 RUN apt-get update && apt-get upgrade -y && apt-get install -y libssl-dev pkg-config && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy over your manifests and cache dependencies.
+# Copy over your manifests to cache dependencies.
 COPY Cargo.toml Cargo.lock ./
-RUN mkdir src/ && \
-    echo "fn main() {}" > src/main.rs && \
-    cargo build --release && \
-    rm -rf src/
+
+# FIX: Create dummy files for BOTH the library and the binary targets.
+# This ensures that cargo build can compile the project structure
+# and correctly cache all dependencies from Cargo.lock.
+RUN mkdir src \
+    && echo "pub fn lib() {}" > src/lib.rs \
+    && echo "fn main() {}" > src/main.rs \
+    && cargo build --release \
+    && rm -rf src/
 
 # Copy your actual source code.
 COPY src ./src
@@ -21,7 +26,7 @@ COPY src ./src
 RUN cargo build --release
 
 # ---- Runtime Stage ----
-# Use a matching, more recent distroless image (debian12 for bookworm).
+# Use a matching distroless image for a smaller footprint and better security.
 FROM gcr.io/distroless/cc-debian12
 
 WORKDIR /app
