@@ -14,7 +14,7 @@ COPY Cargo.toml Cargo.lock ./
 # defined in Cargo.toml, including the integration test.
 RUN mkdir -p src tests && \
     echo "pub fn lib() {}" > src/lib.rs && \
-    echo "fn main() { crate::lib(); }" > src/main.rs && \
+    echo "fn main() { acs_smtp_relay::lib(); }" > src/main.rs && \
     echo "#[test] fn an_empty_test() {}" > tests/smtp_flow.rs && \
     cargo test --no-run --all-features && \
     rm -rf src tests
