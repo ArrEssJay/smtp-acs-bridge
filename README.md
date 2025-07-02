@@ -4,6 +4,8 @@
 
 This service relays emails received via SMTP to the Azure Communication Services (ACS) Email REST API. It is designed to allow applications that can only send email via SMTP to integrate with the modern Azure API.
 
+By design, it implements only the SMTP commands necessary to send an email via ACS. SMTP over SSL/TLS is not currently supported as it is expected that this bridge be running in a trusted environment closely coupled with the mail-generating application.
+
 The project includes:
 
 - A minimal, high-performance SMTP server built with Rust and Tokio.
@@ -88,7 +90,6 @@ This project uses GitHub Actions for continuous integration and delivery.
 
 - **CI (rust.yml):** On every push and pull request, the workflow checks formatting, lints the code, and runs the full test suite.
 - **Docker Build (docker.yml):** On every push to the main branch, a new multi-arch container image is built and pushed to GHCR, tagged with the commit SHA. When a version tag (e.g., v1.0.1) is pushed, it's also tagged with the version number and latest.
-- **Release Drafter (release-drafter.yml):** This action automatically drafts release notes from merged pull requests, simplifying the release process.
 
 ## Local Development
 
