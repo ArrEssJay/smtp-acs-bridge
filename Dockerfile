@@ -1,5 +1,4 @@
 # ---- Builder Stage ----
-# Use a specific, recent, and slim base image for security and reproducibility.
 FROM rust:1.88-slim-bookworm AS builder
 
 # Update all system packages and install build-time dependencies needed for linking.
@@ -27,7 +26,6 @@ COPY tests ./tests
 RUN cargo build --release
 
 # ---- Runtime Stage ----
-# Use a matching distroless image for a smaller footprint and better security.
 FROM gcr.io/distroless/cc-debian12
 
 WORKDIR /app

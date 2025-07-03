@@ -132,7 +132,13 @@ fn build_acs_request<'a>(
     let text_body = parsed_email.body_text(0).map(|s| s.trim().to_string());
     let html_body = parsed_email.body_html(0).map(|s| s.trim().to_string());
 
-    if text_body.is_none() && html_body.is_none() {
+    let text_body_empty = text_body.as_ref().map_or(true, |s| s.is_empty());
+    let html_body_empty = html_body.as_ref().map_or(true, |s| {
+        let normalized = s.replace(char::is_whitespace, "");
+        normalized.is_empty() || normalized == "<html><body></body></html>"
+    });
+
+    if text_body_empty && html_body_empty {
         return Err(anyhow!("Email content is empty (both text and html)"));
     }
 
@@ -228,11 +234,8 @@ mod tests {
     #[test]
     fn test_build_acs_request_rejects_empty_email() {
         let empty_message = MessageParser::new().parse(b"Subject: Empty\r\n\r\n").unwrap();
-        
         let recipients = vec!["to@example.com".to_string()];
-        
         let result = build_acs_request(&empty_message, &recipients, "sender@example.com");
-        
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Email content is empty"));
     }
