@@ -109,7 +109,7 @@ pub async fn handle_connection(stream: TcpStream, mailer: Arc<dyn Mailer>, max_e
 
                     // Relay the collected email data
                     info!("Received {} bytes of email data. Relaying...", email_data.len());
-                    match mailer.send(&email_data, &transaction.recipients).await {
+                    match mailer.send(&email_data, &transaction.recipients, &transaction.from).await {
                         Ok(_) => { if write_response(&mut write_half, 250, "OK: Queued for delivery").await.is_err() { break; } }
                         Err(e) => {
                             error!(error = ?e, "Failed to relay email");
@@ -180,7 +180,7 @@ mod tests {
         struct DummyMailer;
         #[async_trait::async_trait]
         impl Mailer for DummyMailer {
-            async fn send(&self, _raw_email: &[u8], _recipients: &[String]) -> anyhow::Result<()> {
+            async fn send(&self, _raw_email: &[u8], _recipients: &[String], _from: &Option<String>) -> anyhow::Result<()> {
                 Ok(())
             }
         }
@@ -216,6 +216,47 @@ mod tests {
         let n = stream.read(&mut buf).await.unwrap();
         let response = std::str::from_utf8(&buf[..n]).unwrap();
         assert!(response.contains("552"), "Expected 552 error, got: {}", response);
+    }
+
+    #[tokio::test]
+    async fn test_mailer_send_receives_from_argument() {
+        use std::sync::Mutex;
+        struct DummyMailer {
+            pub last_from: Arc<Mutex<Option<Option<String>>>>,
+        }
+        #[async_trait::async_trait]
+        impl Mailer for DummyMailer {
+            async fn send(&self, _raw_email: &[u8], _recipients: &[String], from: &Option<String>) -> anyhow::Result<()> {
+                let mut guard = self.last_from.lock().unwrap();
+                *guard = Some(from.clone());
+                Ok(())
+            }
+        }
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let last_from = Arc::new(Mutex::new(None));
+        let mailer = Arc::new(DummyMailer { last_from: last_from.clone() });
+        let max_email_size = 1000;
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            handle_connection(stream, mailer, max_email_size).await;
+        });
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        let mut buf = [0u8; 1024];
+        let _ = stream.read(&mut buf).await.unwrap();
+        stream.write_all(b"HELO test.example.com\r\n").await.unwrap();
+        let _ = stream.read(&mut buf).await.unwrap();
+        stream.write_all(b"MAIL FROM:<from@example.com>\r\n").await.unwrap();
+        let _ = stream.read(&mut buf).await.unwrap();
+        stream.write_all(b"RCPT TO:<to@example.com>\r\n").await.unwrap();
+        let _ = stream.read(&mut buf).await.unwrap();
+        stream.write_all(b"DATA\r\n").await.unwrap();
+        let _ = stream.read(&mut buf).await.unwrap();
+        stream.write_all(b"Hello\r\n.\r\n").await.unwrap();
+        let _ = stream.read(&mut buf).await.unwrap();
+        // Check that the DummyMailer received the correct 'from' argument
+        let from_value = last_from.lock().unwrap().clone();
+        assert_eq!(from_value, Some(Some("<from@example.com>".to_string())));
     }
 
     #[test]

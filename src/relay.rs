@@ -48,7 +48,7 @@ use mockall::automock;
 #[cfg_attr(feature = "mocks", automock)]
 #[async_trait]
 pub trait Mailer: Send + Sync {
-    async fn send(&self, raw_email: &[u8], recipients: &[String]) -> Result<()>;
+    async fn send(&self, raw_email: &[u8], recipients: &[String], from: &Option<String>) -> Result<()>;
 }
 
 /// A concrete Mailer implementation for Azure Communication Services.
@@ -106,7 +106,7 @@ fn build_acs_request<'a>(
 #[async_trait]
 impl Mailer for AcsMailer {
     #[instrument(skip_all, fields(sender = %self.sender_address, recipient_count = recipients.len()))]
-    async fn send(&self, raw_email: &[u8], recipients: &[String]) -> Result<()> {
+    async fn send(&self, raw_email: &[u8], recipients: &[String], _from: &Option<String>) -> Result<()> {
         info!("Parsing raw email data.");
         let parsed_email = MessageParser::default()
             .parse(raw_email)
