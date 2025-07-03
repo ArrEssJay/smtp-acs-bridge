@@ -55,49 +55,49 @@ pub async fn handle_connection(stream: TcpStream, mailer: Arc<dyn Mailer>, max_e
     loop {
         line.clear();
         match reader.read_line(&mut line).await {
-            Ok(0) => { info!(client_addr = %peer_addr, "Client disconnected"); break; }
+            Ok(0) => { info!(client_addr = %peer_addr, "Client disconnected"); return; }
             Ok(_) => {
                 let cmd = line.trim().to_uppercase();
                 
                 // -- HELO/EHLO --
                 if cmd.starts_with("HELO") || cmd.starts_with("EHLO") {
                     transaction = Transaction::default(); // Reset on (re)-greeting
-                    if write_response(&mut write_half, 250, "OK").await.is_err() { break; }
+                    if write_response(&mut write_half, 250, "OK").await.is_err() { return; }
                 
                 // -- MAIL FROM --
                 } else if cmd.starts_with("MAIL FROM:") {
                     transaction = Transaction::default(); // Start new transaction
                     transaction.from = Some(line.trim()[10..].trim().to_string());
-                    if write_response(&mut write_half, 250, "OK").await.is_err() { break; }
+                    if write_response(&mut write_half, 250, "OK").await.is_err() { return; }
                 
                 // -- RCPT TO --
                 } else if cmd.starts_with("RCPT TO:") {
                     if transaction.from.is_none() {
-                        if write_response(&mut write_half, 503, "Bad sequence of commands").await.is_err() { break; }
+                        if write_response(&mut write_half, 503, "Bad sequence of commands").await.is_err() { return; }
                     } else {
                         transaction.recipients.push(line.trim()[8..].trim().to_string());
-                        if write_response(&mut write_half, 250, "OK").await.is_err() { break; }
+                        if write_response(&mut write_half, 250, "OK").await.is_err() { return; }
                     }
                 
                 // -- DATA --
                 } else if cmd.starts_with("DATA") {
                     if transaction.recipients.is_empty() {
-                         if write_response(&mut write_half, 503, "Bad sequence of commands").await.is_err() { break; }
+                         if write_response(&mut write_half, 503, "Bad sequence of commands").await.is_err() { return; }
                          continue;
                     }
-                    if write_response(&mut write_half, 354, "Start mail input; end with <CRLF>.<CRLF>").await.is_err() { break; }
+                    if write_response(&mut write_half, 354, "Start mail input; end with <CRLF>.<CRLF>").await.is_err() { return; }
                     
                     // Read the email body until the terminating line ".\r\n"
                     let mut email_data = Vec::new();
                     loop {
                         let mut data_line = String::new();
                         match reader.read_line(&mut data_line).await {
-                             Ok(0) => break, // Client disconnected unexpectedly
+                             Ok(0) => { info!(client_addr = %peer_addr, "Client disconnected during DATA"); return; }
                              Ok(_) => {
                                 if email_data.len() + data_line.len() > max_email_size {
                                     error!(client_addr = %peer_addr, size = email_data.len(), max_size = max_email_size, "Email size exceeds maximum limit");
                                     let _ = write_response(&mut write_half, 552, "Requested mail action aborted: exceeded storage allocation").await;
-                                    return; // Close connection
+                                    return;
                                 }
                                  if data_line == ".\r\n" { break; }
                                  // Handle dot-stuffing (a leading '.' is escaped as '..')
@@ -111,10 +111,10 @@ pub async fn handle_connection(stream: TcpStream, mailer: Arc<dyn Mailer>, max_e
                     // Relay the collected email data
                     info!(client_addr = %peer_addr, email_size = email_data.len(), "Received email data. Relaying...");
                     match mailer.send(&email_data, &transaction.recipients, &transaction.from).await {
-                        Ok(_) => { if write_response(&mut write_half, 250, "OK: Queued for delivery").await.is_err() { break; } }
+                        Ok(_) => { if write_response(&mut write_half, 250, "OK: Queued for delivery").await.is_err() { return; } }
                         Err(e) => {
                             error!(client_addr = %peer_addr, error = ?e, "Failed to relay email");
-                            if write_response(&mut write_half, 451, "Requested action aborted: local error in processing").await.is_err() { break; }
+                            if write_response(&mut write_half, 451, "Requested action aborted: local error in processing").await.is_err() { return; }
                         }
                     }
                     transaction = Transaction::default(); // Reset for next email
@@ -122,19 +122,19 @@ pub async fn handle_connection(stream: TcpStream, mailer: Arc<dyn Mailer>, max_e
                 // -- QUIT --
                 } else if cmd.starts_with("QUIT") {
                     let _ = write_response(&mut write_half, 221, "Bye").await;
-                    break;
+                    return;
                 
                 // -- RSET --
                 } else if cmd.starts_with("RSET") {
                     transaction = Transaction::default();
-                    if write_response(&mut write_half, 250, "OK").await.is_err() { break; };
+                    if write_response(&mut write_half, 250, "OK").await.is_err() { return; }
                 }
                 else {
                     warn!(client_addr = %peer_addr, command = %line.trim(), "Unrecognized command");
-                    if write_response(&mut write_half, 500, "Syntax error, command unrecognized").await.is_err() { break; }
+                    if write_response(&mut write_half, 500, "Syntax error, command unrecognized").await.is_err() { return; }
                 }
             }
-            Err(e) => { error!(client_addr = %peer_addr, error = ?e, "Error reading from client"); break; }
+            Err(e) => { error!(client_addr = %peer_addr, error = ?e, "Error reading from client"); return; }
         }
     }
 }
