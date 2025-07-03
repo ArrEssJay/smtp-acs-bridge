@@ -1,6 +1,6 @@
 use acs_smtp_relay::relay::{AcsMailer, Mailer};
 use base64::Engine;
-use wiremock::matchers::{body_json, header, method, path, query_param};
+use wiremock::matchers::{body_json, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[tokio::test]
