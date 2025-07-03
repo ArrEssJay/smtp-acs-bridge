@@ -35,6 +35,8 @@ The service is configured entirely through environment variables.
 | `ACS_SENDER_ADDRESS`    | Required. The verified "MailFrom" address in your ACS Email domain.  | `DoNotReply@your-verified-domain.com`          |
 | `LISTEN_ADDR`           | The IP and port the SMTP server should listen on. Defaults to `0.0.0.0:1025`.               | `0.0.0.0:1025`                                 |
 | `RUST_LOG`              | The logging level. See [EnvFilter docs](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html) for syntax.                     | `info` (Default), `acs_smtp_relay=debug,warn`  |
+| `MAX_EMAIL_SIZE`         | The maximum allowed size (in bytes) for an email. Defaults to 10MB. Emails exceeding this size are rejected with a 552 error. | `10485760` (10MB)                                    |
+| `ACS_ALLOWED_SENDER_DOMAINS` | Comma-separated list of domains allowed for sender override. If set, the SMTP MAIL FROM address will be used as the sender if its domain matches one in this list. Otherwise, the default sender is used. | `example.com,another.com` |
 
 ---
 

@@ -20,6 +20,10 @@ async fn main() -> Result<(), anyhow::Error> {
         .parse::<usize>()
         .context("Failed to parse MAX_EMAIL_SIZE as an integer")?;
 
+    let allowed_sender_domains = env::var("ACS_ALLOWED_SENDER_DOMAINS")
+        .ok()
+        .map(|s| s.split(',').map(|d| d.trim().to_string()).collect());
+
     let acs_config = parse_connection_string(&connection_string)?;
 
     let http_client = reqwest::Client::new();
@@ -28,6 +32,7 @@ async fn main() -> Result<(), anyhow::Error> {
         acs_config.endpoint,
         acs_config.access_key,
         sender_address,
+        allowed_sender_domains,
     ));
 
     let listener = TcpListener::bind(&listen_addr).await?;

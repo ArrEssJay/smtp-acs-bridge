@@ -177,33 +177,30 @@ mod tests {
 
     #[tokio::test]
     async fn test_email_size_limit_enforced() {
-        // Dummy mailer that just returns Ok
-        struct DummyMailer;
+        use std::sync::Arc;
+        use tokio::net::{TcpListener, TcpStream};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        struct MockMailer;
         #[async_trait::async_trait]
-        impl Mailer for DummyMailer {
+        impl Mailer for MockMailer {
             async fn send(&self, _raw_email: &[u8], _recipients: &[String], _from: &Option<String>) -> anyhow::Result<()> {
-                Ok(())
+                panic!("send should not be called when email size exceeds limit");
             }
         }
 
+        let mailer = Arc::new(MockMailer);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let mailer = Arc::new(DummyMailer);
-        let max_email_size = 100; // 100 bytes
-
-        // Spawn the server
+        let max_email_size = 100;
         tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
             handle_connection(stream, mailer, max_email_size).await;
         });
-
-        // Connect as a client
         let mut stream = TcpStream::connect(addr).await.unwrap();
         let mut buf = [0u8; 1024];
-        // Read greeting
         let _ = stream.read(&mut buf).await.unwrap();
-        // Send SMTP commands
-        stream.write_all(b"HELO test.example.com\r\n").await.unwrap();
+        stream.write_all(b"EHLO test.example.com\r\n").await.unwrap();
         let _ = stream.read(&mut buf).await.unwrap();
         stream.write_all(b"MAIL FROM:<from@example.com>\r\n").await.unwrap();
         let _ = stream.read(&mut buf).await.unwrap();
@@ -211,11 +208,12 @@ mod tests {
         let _ = stream.read(&mut buf).await.unwrap();
         stream.write_all(b"DATA\r\n").await.unwrap();
         let _ = stream.read(&mut buf).await.unwrap();
-        // Send a body that exceeds the limit
-        let big_body = "A".repeat(101) + "\r\n.\r\n";
-        stream.write_all(big_body.as_bytes()).await.unwrap();
+        // Send a body that exceeds the max_email_size
+        let big_body = vec![b'a'; 200];
+        stream.write_all(&big_body).await.unwrap();
+        stream.write_all(b".\r\n").await.unwrap();
         let n = stream.read(&mut buf).await.unwrap();
-        let response = std::str::from_utf8(&buf[..n]).unwrap();
+        let response = String::from_utf8_lossy(&buf[..n]);
         assert!(response.contains("552"), "Expected 552 error, got: {}", response);
     }
 

@@ -57,15 +57,23 @@ pub struct AcsMailer {
     api_endpoint: String,
     api_key: String,
     sender_address: String,
+    allowed_sender_domains: Option<Vec<String>>,
 }
 
 impl AcsMailer {
-    pub fn new(client: Client, endpoint: String, key: String, sender: String) -> Self {
+    pub fn new(
+        client: Client,
+        endpoint: String,
+        key: String,
+        sender: String,
+        allowed_sender_domains: Option<Vec<String>>,
+    ) -> Self {
         Self {
             client,
             api_endpoint: endpoint,
             api_key: key,
             sender_address: sender,
+            allowed_sender_domains,
         }
     }
 }
@@ -105,14 +113,34 @@ fn build_acs_request<'a>(
 
 #[async_trait]
 impl Mailer for AcsMailer {
-    #[instrument(skip_all, fields(sender = %self.sender_address, recipient_count = recipients.len()))]
-    async fn send(&self, raw_email: &[u8], recipients: &[String], _from: &Option<String>) -> Result<()> {
+    #[instrument(skip_all, fields(recipient_count = recipients.len()))]
+    async fn send(&self, raw_email: &[u8], recipients: &[String], from: &Option<String>) -> Result<()> {
+        let sender_for_request = if let (Some(allowed_domains), Some(from_address)) =
+            (&self.allowed_sender_domains, from)
+        {
+            // SMTP addresses are often like `<user@domain.com>`, so trim brackets.
+            let trimmed_from = from_address.trim_matches(|c| c == '<' || c == '>');
+            if let Some(from_domain) = trimmed_from.split('@').nth(1) {
+                if allowed_domains.iter().any(|d| d == from_domain) {
+                    info!(client_sender = %trimmed_from, "Using client-provided sender address based on allowed domain list.");
+                    trimmed_from.to_string()
+                } else {
+                    tracing::warn!(client_sender = %trimmed_from, fallback_sender = %self.sender_address, "Client-provided sender domain is not in the allow-list. Using default sender.");
+                    self.sender_address.clone()
+                }
+            } else {
+                tracing::warn!(invalid_from = %from_address, "Could not parse domain from client-provided 'MAIL FROM' address. Using default sender.");
+                self.sender_address.clone()
+            }
+        } else {
+            self.sender_address.clone()
+        };
         info!("Parsing raw email data.");
         let parsed_email = MessageParser::default()
             .parse(raw_email)
             .context("Failed to parse raw email")?;
         info!("Building ACS request payload.");
-        let request_payload = build_acs_request(&parsed_email, recipients, &self.sender_address)?;
+        let request_payload = build_acs_request(&parsed_email, recipients, &sender_for_request)?;
         let body_bytes = serde_json::to_vec(&request_payload)?;
         // --- HMAC-SHA256 Authentication ---
         const API_VERSION: &str = "2023-03-31";
