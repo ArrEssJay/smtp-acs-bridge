@@ -15,6 +15,10 @@ async fn main() -> Result<(), anyhow::Error> {
     let connection_string = env::var("ACS_CONNECTION_STRING").context("ACS_CONNECTION_STRING must be set")?;
     let sender_address = env::var("ACS_SENDER_ADDRESS").context("ACS_SENDER_ADDRESS must be set")?;
     let listen_addr = env::var("LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:1025".to_string());
+    let max_email_size = env::var("MAX_EMAIL_SIZE")
+        .unwrap_or_else(|_| "10485760".to_string()) // Default to 10MB
+        .parse::<usize>()
+        .context("Failed to parse MAX_EMAIL_SIZE as an integer")?;
 
     let acs_config = parse_connection_string(&connection_string)?;
 
@@ -27,9 +31,9 @@ async fn main() -> Result<(), anyhow::Error> {
     ));
 
     let listener = TcpListener::bind(&listen_addr).await?;
-    tracing::info!(listen_addr = %listen_addr, "Minimal SMTP relay listening for connections");
+    tracing::info!(%listen_addr, max_email_size_bytes = max_email_size, "Minimal SMTP relay listening for connections");
 
-    run(listener, mailer).await;
+    run(listener, mailer, max_email_size).await;
 
     tracing::info!("Server has shut down gracefully.");
     Ok(())
