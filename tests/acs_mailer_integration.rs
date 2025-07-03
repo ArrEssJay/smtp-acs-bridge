@@ -90,7 +90,7 @@ async fn test_acs_mailer_sender_override() {
       "content": {
         "subject": "Override Test",
         "plainText": "This is from an allowed sender.",
-        "html": "<html><body><p>This is from an allowed sender.</p></body></html>"
+        "html": "<html><body>This is from an allowed sender.</body></html>"
       },
       "recipients": {
         "to": [ { "address": "<to@example.com>" } ]

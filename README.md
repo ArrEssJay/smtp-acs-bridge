@@ -77,6 +77,16 @@ This project uses GitHub Actions for continuous integration and delivery.
 cargo test --all-features
 ```
 
+## SMTP Authentication Compatibility
+
+Some SMTP clients require the server to advertise and accept the `AUTH` command, even if authentication is not enforced. This service implements a no-op AUTH handler for compatibility:
+
+- The server advertises `AUTH PLAIN LOGIN` in response to `EHLO`.
+- Any `AUTH` command is accepted and immediately replied to with a success message.
+- No credentials are checked; authentication is a no-op. Security should be enforced at the network or deployment level.
+
+This allows clients that require authentication (such as Microsoft Autodiscover Service or some mail clients) to connect and relay mail successfully.
+
 ## License
 
 This project is licensed under the MIT License. See the `Cargo.toml` file for details.

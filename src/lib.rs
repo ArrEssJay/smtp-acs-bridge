@@ -47,10 +47,10 @@ pub async fn handle_connection(stream: TcpStream, mailer: Arc<dyn Mailer>, max_e
     let (read_half, mut write_half) = io::split(stream);
     let mut reader = BufReader::new(read_half);
 
+    if write_response(&mut write_half, 220, "acs-smtp-relay ready").await.is_err() { return; }
+
     let mut line = String::new();
     let mut transaction = Transaction::default();
-
-    if write_response(&mut write_half, 220, "acs-smtp-relay ready").await.is_err() { return; }
 
     loop {
         line.clear();
@@ -59,18 +59,22 @@ pub async fn handle_connection(stream: TcpStream, mailer: Arc<dyn Mailer>, max_e
             Ok(_) => {
                 let cmd = line.trim().to_uppercase();
                 
-                // -- HELO/EHLO --
-                if cmd.starts_with("HELO") || cmd.starts_with("EHLO") {
-                    transaction = Transaction::default(); // Reset on (re)-greeting
+                if cmd.starts_with("HELO") {
+                    transaction = Transaction::default();
                     if write_response(&mut write_half, 250, "OK").await.is_err() { return; }
-                
-                // -- MAIL FROM --
+                } else if cmd.starts_with("EHLO") {
+                    transaction = Transaction::default();
+                    // THE FINAL FIX: The last line of a multi-line response must use a space, not a hyphen.
+                    let ehlo_response = b"250-acs-smtp-relay at your.service\r\n250 AUTH PLAIN LOGIN\r\n";
+                    if write_half.write_all(ehlo_response).await.is_err() { return; }
+                    info!(client_response = "250-..., 250 ...", "Sent EHLO response");
+                } else if cmd.starts_with("AUTH") {
+                    // This is a no-op auth handler.
+                    if write_response(&mut write_half, 235, "2.7.0 Authentication successful").await.is_err() { return; }
                 } else if cmd.starts_with("MAIL FROM:") {
-                    transaction = Transaction::default(); // Start new transaction
+                    transaction = Transaction::default();
                     transaction.from = Some(line.trim()[10..].trim().to_string());
                     if write_response(&mut write_half, 250, "OK").await.is_err() { return; }
-                
-                // -- RCPT TO --
                 } else if cmd.starts_with("RCPT TO:") {
                     if transaction.from.is_none() {
                         if write_response(&mut write_half, 503, "Bad sequence of commands").await.is_err() { return; }
@@ -78,8 +82,6 @@ pub async fn handle_connection(stream: TcpStream, mailer: Arc<dyn Mailer>, max_e
                         transaction.recipients.push(line.trim()[8..].trim().to_string());
                         if write_response(&mut write_half, 250, "OK").await.is_err() { return; }
                     }
-                
-                // -- DATA --
                 } else if cmd.starts_with("DATA") {
                     if transaction.recipients.is_empty() {
                          if write_response(&mut write_half, 503, "Bad sequence of commands").await.is_err() { return; }
@@ -87,7 +89,6 @@ pub async fn handle_connection(stream: TcpStream, mailer: Arc<dyn Mailer>, max_e
                     }
                     if write_response(&mut write_half, 354, "Start mail input; end with <CRLF>.<CRLF>").await.is_err() { return; }
                     
-                    // Read the email body until the terminating line ".\r\n"
                     let mut email_data = Vec::new();
                     loop {
                         let mut data_line = String::new();
@@ -100,7 +101,6 @@ pub async fn handle_connection(stream: TcpStream, mailer: Arc<dyn Mailer>, max_e
                                     return;
                                 }
                                  if data_line == ".\r\n" { break; }
-                                 // Handle dot-stuffing (a leading '.' is escaped as '..')
                                  let line_to_write = if data_line.starts_with('.') { &data_line[1..] } else { &data_line };
                                  email_data.extend_from_slice(line_to_write.as_bytes());
                              }
@@ -108,7 +108,6 @@ pub async fn handle_connection(stream: TcpStream, mailer: Arc<dyn Mailer>, max_e
                         }
                     }
 
-                    // Relay the collected email data
                     info!(client_addr = %peer_addr, email_size = email_data.len(), "Received email data. Relaying...");
                     match mailer.send(&email_data, &transaction.recipients, &transaction.from).await {
                         Ok(_) => { if write_response(&mut write_half, 250, "OK: Queued for delivery").await.is_err() { return; } }
@@ -117,19 +116,14 @@ pub async fn handle_connection(stream: TcpStream, mailer: Arc<dyn Mailer>, max_e
                             if write_response(&mut write_half, 451, "Requested action aborted: local error in processing").await.is_err() { return; }
                         }
                     }
-                    transaction = Transaction::default(); // Reset for next email
-                
-                // -- QUIT --
+                    transaction = Transaction::default();
                 } else if cmd.starts_with("QUIT") {
                     let _ = write_response(&mut write_half, 221, "Bye").await;
                     return;
-                
-                // -- RSET --
                 } else if cmd.starts_with("RSET") {
                     transaction = Transaction::default();
                     if write_response(&mut write_half, 250, "OK").await.is_err() { return; }
-                }
-                else {
+                } else {
                     warn!(client_addr = %peer_addr, command = %line.trim(), "Unrecognized command");
                     if write_response(&mut write_half, 500, "Syntax error, command unrecognized").await.is_err() { return; }
                 }
