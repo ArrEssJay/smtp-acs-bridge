@@ -10,11 +10,13 @@ async fn test_smtp_session_flow() {
     let raw_email_body = "Subject: Test\r\n\r\nHello world\r\n";
     
     mock_mailer.expect_send()
-        .withf(move |data, recipients| {
-            data == raw_email_body.as_bytes() && recipients == ["<to@example.com>"]
+        .withf(move |data, recipients, from| {
+            data == raw_email_body.as_bytes()
+                && recipients == ["<to@example.com>"]
+                && from.as_deref() == Some("<from@example.com>")
         })
         .times(1)
-        .returning(|_, _| Ok(()));
+        .returning(|_, _, _| Ok(()));
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -22,7 +24,7 @@ async fn test_smtp_session_flow() {
 
     tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        handle_connection(stream, mailer_arc).await;
+        handle_connection(stream, mailer_arc, 10_000_000).await;
     });
 
     let (read_half, mut write_half) = io::split(TcpStream::connect(addr).await.unwrap());

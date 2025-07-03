@@ -42,7 +42,8 @@ async fn write_response(stream: &mut io::WriteHalf<TcpStream>, code: u16, text: 
 /// Handles a single, complete client TCP connection, processing one or more SMTP transactions.
 #[instrument(skip_all, fields(peer_addr = %stream.peer_addr().map_or_else(|_| "unknown".to_string(), |a| a.to_string())))]
 pub async fn handle_connection(stream: TcpStream, mailer: Arc<dyn Mailer>, max_email_size: usize) {
-    info!("New client connection");
+    let peer_addr = stream.peer_addr().map_or_else(|_| "unknown".to_string(), |a| a.to_string());
+    info!(client_addr = %peer_addr, "New client connection");
     let (read_half, mut write_half) = io::split(stream);
     let mut reader = BufReader::new(read_half);
 
@@ -54,7 +55,7 @@ pub async fn handle_connection(stream: TcpStream, mailer: Arc<dyn Mailer>, max_e
     loop {
         line.clear();
         match reader.read_line(&mut line).await {
-            Ok(0) => { info!("Client disconnected"); break; }
+            Ok(0) => { info!(client_addr = %peer_addr, "Client disconnected"); break; }
             Ok(_) => {
                 let cmd = line.trim().to_uppercase();
                 
@@ -94,7 +95,7 @@ pub async fn handle_connection(stream: TcpStream, mailer: Arc<dyn Mailer>, max_e
                              Ok(0) => break, // Client disconnected unexpectedly
                              Ok(_) => {
                                 if email_data.len() + data_line.len() > max_email_size {
-                                    error!(size = email_data.len(), max_size = max_email_size, "Email size exceeds maximum limit");
+                                    error!(client_addr = %peer_addr, size = email_data.len(), max_size = max_email_size, "Email size exceeds maximum limit");
                                     let _ = write_response(&mut write_half, 552, "Requested mail action aborted: exceeded storage allocation").await;
                                     return; // Close connection
                                 }
@@ -103,16 +104,16 @@ pub async fn handle_connection(stream: TcpStream, mailer: Arc<dyn Mailer>, max_e
                                  let line_to_write = if data_line.starts_with('.') { &data_line[1..] } else { &data_line };
                                  email_data.extend_from_slice(line_to_write.as_bytes());
                              }
-                             Err(e) => { error!(error = ?e, "Error reading email data"); return; }
+                             Err(e) => { error!(client_addr = %peer_addr, error = ?e, "Error reading email data"); return; }
                         }
                     }
 
                     // Relay the collected email data
-                    info!("Received {} bytes of email data. Relaying...", email_data.len());
+                    info!(client_addr = %peer_addr, email_size = email_data.len(), "Received email data. Relaying...");
                     match mailer.send(&email_data, &transaction.recipients, &transaction.from).await {
                         Ok(_) => { if write_response(&mut write_half, 250, "OK: Queued for delivery").await.is_err() { break; } }
                         Err(e) => {
-                            error!(error = ?e, "Failed to relay email");
+                            error!(client_addr = %peer_addr, error = ?e, "Failed to relay email");
                             if write_response(&mut write_half, 451, "Requested action aborted: local error in processing").await.is_err() { break; }
                         }
                     }
@@ -129,11 +130,11 @@ pub async fn handle_connection(stream: TcpStream, mailer: Arc<dyn Mailer>, max_e
                     if write_response(&mut write_half, 250, "OK").await.is_err() { break; };
                 }
                 else {
-                    warn!(command = %line.trim(), "Unrecognized command");
+                    warn!(client_addr = %peer_addr, command = %line.trim(), "Unrecognized command");
                     if write_response(&mut write_half, 500, "Syntax error, command unrecognized").await.is_err() { break; }
                 }
             }
-            Err(e) => { error!(error = ?e, "Error reading from client"); break; }
+            Err(e) => { error!(client_addr = %peer_addr, error = ?e, "Error reading from client"); break; }
         }
     }
 }
@@ -279,5 +280,65 @@ mod tests {
         let result = parse_connection_string(conn_str);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("missing 'accesskey'"));
+    }
+
+    #[tokio::test]
+    async fn test_client_addr_in_logs() {
+        use std::sync::{Arc, Mutex};
+        use tracing_subscriber::{fmt, EnvFilter};
+        use std::sync::mpsc;
+
+        // Set up a channel to capture logs
+        let (tx, rx) = mpsc::channel();
+        let tx = Arc::new(Mutex::new(tx));
+        struct ChannelWriter {
+            tx: Arc<Mutex<mpsc::Sender<String>>>,
+        }
+        impl std::io::Write for ChannelWriter {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                let s = String::from_utf8_lossy(buf).to_string();
+                let _ = self.tx.lock().unwrap().send(s);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let make_writer = {
+            let tx = tx.clone();
+            move || ChannelWriter { tx: tx.clone() }
+        };
+        let subscriber = fmt()
+            .with_env_filter(EnvFilter::new("info"))
+            .with_writer(make_writer)
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        struct DummyMailer;
+        #[async_trait::async_trait]
+        impl Mailer for DummyMailer {
+            async fn send(&self, _raw_email: &[u8], _recipients: &[String], _from: &Option<String>) -> anyhow::Result<()> {
+                Ok(())
+            }
+        }
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mailer = Arc::new(DummyMailer);
+        let max_email_size = 1000;
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            handle_connection(stream, mailer, max_email_size).await;
+        });
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        let mut buf = [0u8; 1024];
+        let _ = stream.read(&mut buf).await.unwrap();
+        stream.write_all(b"HELO test.example.com\r\n").await.unwrap();
+        let _ = stream.read(&mut buf).await.unwrap();
+        stream.write_all(b"QUIT\r\n").await.unwrap();
+        let _ = stream.read(&mut buf).await.unwrap();
+        // Collect logs
+        let logs: Vec<String> = rx.try_iter().collect();
+        let found = logs.iter().any(|log| log.contains("client_addr"));
+        assert!(found, "Expected client_addr in logs, got: {:?}", logs);
     }
 }
