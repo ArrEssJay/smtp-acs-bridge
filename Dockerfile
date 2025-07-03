@@ -28,6 +28,8 @@ RUN cargo build --release
 # ---- Runtime Stage ----
 FROM gcr.io/distroless/cc-debian12
 
+LABEL org.opencontainers.image.description="SMTP to Azure Communication Services relay. See README for details."
+
 WORKDIR /app
 
 # Copy the compiled binary from the builder stage.

@@ -1,4 +1,10 @@
-# Release Drafter configuration for automatic, categorized release notes
+template: |
+  ## Changes
+
+  $CHANGES
+
+  $CONTRIBUTORS
+
 name-template: 'v$NEXT_PATCH_VERSION'
 tag-template: 'v$NEXT_PATCH_VERSION'
 
@@ -29,8 +35,3 @@ categories:
 
 change-template: '- $TITLE (#$NUMBER) @$AUTHOR'
 no-changes-template: 'No user-facing changes in this release.'
-
-# Optionally, customize the release notes footer
-footer-template: |
-  ---
-  _Automated with [Release Drafter](https://github.com/release-drafter/release-drafter)_
