@@ -5,7 +5,7 @@ on:
     branches: [ "main" ]
     # Trigger on version tags like v1.2.3
     tags:
-      - 'v*..'
+      - 'v*'
   pull_request:
     branches: [ "main" ]
 

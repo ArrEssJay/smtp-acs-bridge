@@ -1,5 +1,4 @@
-# Configuration for Release Drafter: https://github.com/release-drafter/release-drafter
-
+# Release Drafter configuration for automatic, categorized release notes
 name-template: 'v$NEXT_PATCH_VERSION'
 tag-template: 'v$NEXT_PATCH_VERSION'
 
@@ -8,22 +7,30 @@ categories:
     labels:
       - 'feature'
       - 'enhancement'
-  - title: '🐛 Bug Fixes'
+      - 'feat'
+  - title: 'Bug Fixes'
     labels:
-      - 'fix'
       - 'bug'
-  - title: 'Documentation'
-    labels:
-      - 'documentation'
+      - 'fix'
   - title: 'Maintenance'
     labels:
       - 'chore'
-      - 'dependencies'
+      - 'maintenance'
+      - 'refactor'
+  - title: 'Documentation'
+    labels:
+      - 'docs'
+      - 'documentation'
+  - title: 'CI/CD'
+    labels:
       - 'ci'
+      - 'github-actions'
+      - 'workflow'
 
-template: |
-  ## What's Changed
+change-template: '- $TITLE (#$NUMBER) @$AUTHOR'
+no-changes-template: 'No user-facing changes in this release.'
 
-  $CHANGES
-
-  **Full Changelog**: https://github.com/$OWNER/$REPOSITORY/compare/$PREVIOUS_TAG...$TAG
+# Optionally, customize the release notes footer
+footer-template: |
+  ---
+  _Automated with [Release Drafter](https://github.com/release-drafter/release-drafter)_
