@@ -50,7 +50,7 @@ jobs:
       run: cargo test ${{ matrix.features }} --verbose
 
     - name: Run integration tests
-      run: cargo test ${{ matrix.features }} --test '*' --verbose
+      run: cargo test --features mocks --test '*' --verbose
 
   security:
     name: Security Audit
