@@ -52,7 +52,7 @@ impl HealthStatus {
 
     pub async fn with_metrics(mut self, collector: &MetricsCollector) -> Self {
         let metrics_snapshot = collector.get_snapshot().await;
-        
+
         self.uptime_seconds = metrics_snapshot.get_uptime().map(|d| d.as_secs());
         self.metrics = Some(HealthMetrics {
             connections_total: metrics_snapshot.connections_total,
@@ -64,7 +64,7 @@ impl HealthStatus {
                 .get_average_response_time()
                 .map(|d| d.as_millis() as u64),
         });
-        
+
         self
     }
 }
@@ -94,9 +94,7 @@ pub async fn start_health_server(
 
     info!(bind_addr = %bind_addr, "Starting health check server");
 
-    warp::serve(routes)
-        .run(bind_addr)
-        .await;
+    warp::serve(routes).run(bind_addr).await;
 
     Ok(())
 }
@@ -127,13 +125,13 @@ async fn metrics_handler(metrics: MetricsCollector) -> Result<impl Reply, warp::
 async fn readiness_handler(metrics: MetricsCollector) -> Result<impl Reply, warp::Rejection> {
     // Simple readiness check - server is ready if it can serve requests
     let mut status = HealthStatus::new();
-    
+
     // Check if we've had any recent failures
     let metrics_snapshot = metrics.get_snapshot().await;
     if metrics_snapshot.get_success_rate() < 0.5 && metrics_snapshot.emails_sent_total > 10 {
         status.status = "degraded".to_string();
     }
-    
+
     status = status.with_metrics(&metrics).await;
     Ok(warp::reply::json(&status))
 }
@@ -180,7 +178,7 @@ mod tests {
         collector.increment_connections().await;
 
         let health = HealthStatus::new().with_metrics(&collector).await;
-        
+
         assert!(health.metrics.is_some());
         let metrics = health.metrics.unwrap();
         assert_eq!(metrics.emails_sent_total, 1);

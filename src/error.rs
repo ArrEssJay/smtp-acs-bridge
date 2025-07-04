@@ -78,10 +78,14 @@ impl fmt::Display for SmtpRelayError {
 impl fmt::Display for ConfigError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ConfigError::InvalidConnectionString(s) => write!(f, "Invalid connection string: {}", s),
+            ConfigError::InvalidConnectionString(s) => {
+                write!(f, "Invalid connection string: {}", s)
+            }
             ConfigError::MissingEndpoint => write!(f, "Missing endpoint in connection string"),
             ConfigError::MissingAccessKey => write!(f, "Missing access key in connection string"),
-            ConfigError::InvalidSenderAddress(addr) => write!(f, "Invalid sender address: {}", addr),
+            ConfigError::InvalidSenderAddress(addr) => {
+                write!(f, "Invalid sender address: {}", addr)
+            }
             ConfigError::InvalidDomain(domain) => write!(f, "Invalid domain: {}", domain),
             ConfigError::InvalidPort(port) => write!(f, "Invalid port: {}", port),
         }

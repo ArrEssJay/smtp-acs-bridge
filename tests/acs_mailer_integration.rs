@@ -7,7 +7,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 async fn test_acs_mailer_sends_correct_request() {
     // Arrange
     let server = MockServer::start().await;
-    
+
     // THE FIX: The expected body must include the 'html' field that mail-parser auto-generates.
     // The library wraps the plain text in a simple <p> tag.
     let expected_body = serde_json::json!({
@@ -22,7 +22,7 @@ async fn test_acs_mailer_sends_correct_request() {
       }
     });
 
-    Mock::given(method("POST")) 
+    Mock::given(method("POST"))
         .and(path("/emails:send"))
         .and(query_param("api-version", "2023-03-31"))
         .and(body_json(expected_body.clone()))
@@ -30,23 +30,25 @@ async fn test_acs_mailer_sends_correct_request() {
         .mount(&server)
         .await;
 
-
     // Debugging: Log unmatched requests
     Mock::given(|_request: &wiremock::Request| true) // Match any request
-    .respond_with({
-        let expected_body = expected_body.clone();
-        move |request: &wiremock::Request| {
+        .respond_with({
             let expected_body = expected_body.clone();
-            let body_str = String::from_utf8_lossy(&request.body);
-            println!("\n--- UNMATCHED REQUEST RECEIVED ---");
-            println!("EXPECTED BODY:\n{}", serde_json::to_string_pretty(&expected_body).unwrap());
-            println!("\nACTUAL BODY:\n{}", body_str);
-            println!("--- END UNMATCHED REQUEST ---\n");
-            ResponseTemplate::new(404)
-        }
-    })
-    .mount(&server)
-    .await;
+            move |request: &wiremock::Request| {
+                let expected_body = expected_body.clone();
+                let body_str = String::from_utf8_lossy(&request.body);
+                println!("\n--- UNMATCHED REQUEST RECEIVED ---");
+                println!(
+                    "EXPECTED BODY:\n{}",
+                    serde_json::to_string_pretty(&expected_body).unwrap()
+                );
+                println!("\nACTUAL BODY:\n{}", body_str);
+                println!("--- END UNMATCHED REQUEST ---\n");
+                ResponseTemplate::new(404)
+            }
+        })
+        .mount(&server)
+        .await;
 
     let http_client = reqwest::Client::new();
     let access_key = base64::engine::general_purpose::STANDARD.encode("dummy_key");
@@ -83,7 +85,7 @@ async fn test_acs_mailer_sends_correct_request() {
 async fn test_acs_mailer_sender_override() {
     // Arrange
     let server = MockServer::start().await;
-    
+
     // THE FIX: The expected body must also be updated in this test.
     let expected_body = serde_json::json!({
       "senderAddress": "override@allowed.com",

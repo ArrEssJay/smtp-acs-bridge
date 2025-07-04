@@ -72,14 +72,17 @@ impl Metrics {
     }
 
     pub fn increment_error(&mut self, error_type: &str) {
-        *self.errors_by_type.entry(error_type.to_string()).or_insert(0) += 1;
+        *self
+            .errors_by_type
+            .entry(error_type.to_string())
+            .or_insert(0) += 1;
     }
 
     pub fn get_average_response_time(&self) -> Option<Duration> {
         if self.response_times.is_empty() {
             return None;
         }
-        
+
         let total: Duration = self.response_times.iter().sum();
         Some(total / self.response_times.len() as u32)
     }
@@ -107,7 +110,9 @@ impl Metrics {
             response_times_count: self.response_times.len(),
             errors_by_type: self.errors_by_type.clone(),
             uptime_seconds: self.get_uptime().map(|d| d.as_secs()),
-            average_response_time_ms: self.get_average_response_time().map(|d| d.as_millis() as u64),
+            average_response_time_ms: self
+                .get_average_response_time()
+                .map(|d| d.as_millis() as u64),
             success_rate_percent: self.get_success_rate() * 100.0,
         }
     }
@@ -178,7 +183,7 @@ impl MetricsCollector {
     // Log current metrics at INFO level
     pub async fn log_metrics(&self) {
         let metrics = self.get_snapshot().await;
-        
+
         info!(
             connections_total = metrics.connections_total,
             connections_active = metrics.connections_active,
@@ -226,7 +231,9 @@ mod tests {
         collector.increment_connections().await;
         collector.increment_emails_sent().await;
         collector.add_bytes_processed(1024).await;
-        collector.record_response_time(Duration::from_millis(100)).await;
+        collector
+            .record_response_time(Duration::from_millis(100))
+            .await;
 
         let metrics = collector.get_snapshot().await;
         assert_eq!(metrics.connections_total, 1);

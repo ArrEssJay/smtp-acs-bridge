@@ -33,7 +33,7 @@ impl Config {
         allowed_sender_domains: Option<Vec<String>>,
     ) -> Result<Self, SmtpRelayError> {
         let acs_config = parse_connection_string(connection_string)?;
-        
+
         let config = Self {
             smtp_bind_address,
             acs_config,
@@ -43,11 +43,11 @@ impl Config {
             connection_timeout: std::time::Duration::from_secs(300), // 5 minutes
             max_concurrent_connections: Some(1000),
         };
-        
+
         config.validate()?;
         Ok(config)
     }
-    
+
     // Validates the entire configuration
     pub fn validate(&self) -> Result<(), SmtpRelayError> {
         self.validate_smtp_config()?;
@@ -57,42 +57,45 @@ impl Config {
         self.validate_limits()?;
         Ok(())
     }
-    
+
     fn validate_smtp_config(&self) -> Result<(), SmtpRelayError> {
         if self.smtp_bind_address.port() == 0 {
             return Err(SmtpRelayError::Config(ConfigError::InvalidPort(0)));
         }
-        
+
         if self.smtp_bind_address.port() < 1024 && !is_privileged_user() {
             return Err(SmtpRelayError::Config(ConfigError::InvalidPort(
                 self.smtp_bind_address.port(),
             )));
         }
-        
+
         Ok(())
     }
-    
+
     fn validate_acs_config(&self) -> Result<(), SmtpRelayError> {
         // Validate endpoint URL
-        Url::parse(&self.acs_config.endpoint)
-            .map_err(|_| SmtpRelayError::Config(ConfigError::InvalidConnectionString(
+        Url::parse(&self.acs_config.endpoint).map_err(|_| {
+            SmtpRelayError::Config(ConfigError::InvalidConnectionString(
                 "Invalid endpoint URL".to_string(),
-            )))?;
-        
+            ))
+        })?;
+
         // Validate access key format (base64 string)
         if self.acs_config.access_key.is_empty() {
             return Err(SmtpRelayError::Config(ConfigError::MissingAccessKey));
         }
-        
+
         base64::engine::general_purpose::STANDARD
             .decode(&self.acs_config.access_key)
-            .map_err(|_| SmtpRelayError::Config(ConfigError::InvalidConnectionString(
-                "Invalid access key format".to_string(),
-            )))?;
-        
+            .map_err(|_| {
+                SmtpRelayError::Config(ConfigError::InvalidConnectionString(
+                    "Invalid access key format".to_string(),
+                ))
+            })?;
+
         Ok(())
     }
-    
+
     fn validate_sender_address(&self) -> Result<(), SmtpRelayError> {
         if !is_valid_email(&self.sender_address) {
             return Err(SmtpRelayError::Config(ConfigError::InvalidSenderAddress(
@@ -101,7 +104,7 @@ impl Config {
         }
         Ok(())
     }
-    
+
     fn validate_allowed_domains(&self) -> Result<(), SmtpRelayError> {
         if let Some(domains) = &self.allowed_sender_domains {
             for domain in domains {
@@ -114,20 +117,24 @@ impl Config {
         }
         Ok(())
     }
-    
+
     fn validate_limits(&self) -> Result<(), SmtpRelayError> {
         if self.max_message_size == 0 {
-            return Err(SmtpRelayError::Config(ConfigError::InvalidConnectionString(
-                "Message size limit must be greater than 0".to_string(),
-            )));
+            return Err(SmtpRelayError::Config(
+                ConfigError::InvalidConnectionString(
+                    "Message size limit must be greater than 0".to_string(),
+                ),
+            ));
         }
-        
+
         if self.connection_timeout.is_zero() {
-            return Err(SmtpRelayError::Config(ConfigError::InvalidConnectionString(
-                "Connection timeout must be greater than 0".to_string(),
-            )));
+            return Err(SmtpRelayError::Config(
+                ConfigError::InvalidConnectionString(
+                    "Connection timeout must be greater than 0".to_string(),
+                ),
+            ));
         }
-        
+
         Ok(())
     }
 }
@@ -138,19 +145,22 @@ pub fn parse_connection_string(conn_str: &str) -> Result<AcsConfig, SmtpRelayErr
         .split(';')
         .filter_map(|s| s.split_once('='))
         .collect();
-    
+
     let endpoint = map
         .get("endpoint")
         .ok_or(SmtpRelayError::Config(ConfigError::MissingEndpoint))?
         .trim_end_matches('/')
         .to_string();
-    
+
     let access_key = map
         .get("accesskey")
         .ok_or(SmtpRelayError::Config(ConfigError::MissingAccessKey))?
         .to_string();
-    
-    Ok(AcsConfig { endpoint, access_key })
+
+    Ok(AcsConfig {
+        endpoint,
+        access_key,
+    })
 }
 
 // Basic email address validation
@@ -161,7 +171,9 @@ fn is_valid_email(email: &str) -> bool {
 // Basic domain validation
 fn is_valid_domain(domain: &str) -> bool {
     !domain.is_empty()
-        && domain.chars().all(|c| c.is_alphanumeric() || c == '.' || c == '-')
+        && domain
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '.' || c == '-')
         && !domain.starts_with('.')
         && !domain.ends_with('.')
         && !domain.starts_with('-')
@@ -225,14 +237,14 @@ mod tests {
     fn test_config_validation() {
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 2525);
         let conn_str = "endpoint=https://example.communication.azure.com/;accesskey=dGVzdEtleQ==";
-        
+
         let config = Config::new(
             addr,
             conn_str,
             "test@example.com".to_string(),
             Some(vec!["example.com".to_string()]),
         );
-        
+
         assert!(config.is_ok());
     }
 }

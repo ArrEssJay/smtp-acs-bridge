@@ -1,8 +1,8 @@
 // **MANUAL INTEGRATION TEST - Requires Running Server**
-// 
+//
 // This test sends an email via a running smtp-acs-bridge instance.
 // It is designed for manual, true end-to-end testing against the real Azure ACS.
-// 
+//
 // **EXPECTED BEHAVIOR:** This test will FAIL if run without a server running.
 // The failure "Connection refused" is normal and expected when no server is listening.
 //
@@ -62,7 +62,10 @@ async fn send_test_email() -> Result<()> {
     let send_result = tokio::task::spawn_blocking(move || mailer.send(&email)).await??;
 
     // Now we can properly assert success.
-    assert_eq!(send_result.code().severity, lettre::transport::smtp::response::Severity::PositiveCompletion);
+    assert_eq!(
+        send_result.code().severity,
+        lettre::transport::smtp::response::Severity::PositiveCompletion
+    );
     println!("Email sent successfully: {:?}", send_result);
 
     Ok(())

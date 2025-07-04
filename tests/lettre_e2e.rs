@@ -77,7 +77,10 @@ async fn test_lettre_sends_email_through_bridge_to_mock_acs() -> anyhow::Result<
 
     // spawn_blocking is used because the `lettre` SMTP transport is blocking.
     let send_result = tokio::task::spawn_blocking(move || smtp_client.send(&email)).await??;
-    assert_eq!(send_result.code().severity, lettre::transport::smtp::response::Severity::PositiveCompletion);
+    assert_eq!(
+        send_result.code().severity,
+        lettre::transport::smtp::response::Severity::PositiveCompletion
+    );
 
     // --- 4. Verify mock and cleanly shut down the server task ---
     acs_server.verify().await;
