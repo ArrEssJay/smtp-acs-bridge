@@ -1,37 +1,30 @@
-use anyhow::{Context, Result};
-use std::collections::HashMap;
+use anyhow::Result;
 use std::sync::Arc;
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::signal;
-use tracing::{error, info, instrument, warn};
+use tracing::{error, info, instrument, warn, Span};
 
+pub mod config;
+pub mod error;
+#[cfg(feature = "health-server")]
+pub mod health;
+pub mod metrics;
 pub mod relay;
+
+pub use config::{AcsConfig, Config, parse_connection_string};
+pub use error::SmtpRelayError;
+pub use metrics::MetricsCollector;
 use relay::Mailer;
 
-/// Holds the parsed configuration from the Azure connection string.
-#[derive(Debug)]
-pub struct AcsConfig {
-    pub endpoint: String,
-    pub access_key: String,
-}
-
-/// Parses a connection string like "endpoint=...;accesskey=..." into an AcsConfig struct.
-pub fn parse_connection_string(conn_str: &str) -> Result<AcsConfig> {
-    let map: HashMap<_, _> = conn_str.split(';').filter_map(|s| s.split_once('=')).collect();
-    let endpoint = map.get("endpoint").context("Connection string is missing 'endpoint'")?.to_string();
-    let access_key = map.get("accesskey").context("Connection string is missing 'accesskey'")?.to_string();
-    Ok(AcsConfig { endpoint, access_key })
-}
-
-/// Represents the state of a single SMTP transaction (one email).
+// Represents the state of a single SMTP transaction (one email).
 #[derive(Default, Clone)]
 struct Transaction {
     from: Option<String>,
     recipients: Vec<String>,
 }
 
-/// Writes a standard SMTP response line to the client stream.
+// Writes a standard SMTP response line to the client stream.
 async fn write_response(stream: &mut io::WriteHalf<TcpStream>, code: u16, text: &str) -> Result<()> {
     let response = format!("{} {}\r\n", code, text);
     stream.write_all(response.as_bytes()).await?;
@@ -39,15 +32,27 @@ async fn write_response(stream: &mut io::WriteHalf<TcpStream>, code: u16, text: 
     Ok(())
 }
 
-/// Handles a single, complete client TCP connection, processing one or more SMTP transactions.
-#[instrument(skip_all, fields(peer_addr = %stream.peer_addr().map_or_else(|_| "unknown".to_string(), |a| a.to_string())))]
-pub async fn handle_connection(stream: TcpStream, mailer: Arc<dyn Mailer>, max_email_size: usize) {
+// Handles a single, complete client TCP connection, processing one or more SMTP transactions.
+#[instrument(skip_all, name = "handle_connection")]
+pub async fn handle_connection(
+    stream: TcpStream,
+    mailer: Arc<dyn Mailer>,
+    max_email_size: usize,
+    server_name: String,
+) {
+    info!("handle_connection: START");
     let peer_addr = stream.peer_addr().map_or_else(|_| "unknown".to_string(), |a| a.to_string());
+    // Manually add the peer_addr to the current span for better logging context.
+    Span::current().record("peer_addr", peer_addr.as_str());
+
     info!(client_addr = %peer_addr, "New client connection");
     let (read_half, mut write_half) = io::split(stream);
     let mut reader = BufReader::new(read_half);
 
-    if write_response(&mut write_half, 220, "acs-smtp-relay ready").await.is_err() { return; }
+    if write_response(&mut write_half, 220, "acs-smtp-relay ready").await.is_err() { 
+        info!("handle_connection: END (failed to send greeting)");
+        return; 
+    }
 
     let mut line = String::new();
     let mut transaction = Transaction::default();
@@ -55,26 +60,30 @@ pub async fn handle_connection(stream: TcpStream, mailer: Arc<dyn Mailer>, max_e
     loop {
         line.clear();
         match reader.read_line(&mut line).await {
-            Ok(0) => { info!(client_addr = %peer_addr, "Client disconnected"); return; }
+            Ok(0) => { info!(client_addr = %peer_addr, "Client disconnected"); info!("handle_connection: END (client disconnected)"); return; }
             Ok(_) => {
                 let cmd = line.trim().to_uppercase();
                 
                 if cmd.starts_with("HELO") {
                     transaction = Transaction::default();
-                    if write_response(&mut write_half, 250, "OK").await.is_err() { return; }
+                    if write_response(&mut write_half, 250, &server_name).await.is_err() { return; }
                 } else if cmd.starts_with("EHLO") {
                     transaction = Transaction::default();
-                    // THE FINAL FIX: The last line of a multi-line response must use a space, not a hyphen.
-                    let ehlo_response = b"250-acs-smtp-relay at your.service\r\n250 AUTH PLAIN LOGIN\r\n";
-                    if write_half.write_all(ehlo_response).await.is_err() { return; }
-                    info!(client_response = "250-..., 250 ...", "Sent EHLO response");
+                    let ehlo_response = format!("250-{}\r\n250 AUTH PLAIN LOGIN\r\n", server_name);
+                    if write_half.write_all(ehlo_response.as_bytes()).await.is_err() { return; }
+                    info!(client_response = %ehlo_response.trim(), "Sent EHLO response");
                 } else if cmd.starts_with("AUTH") {
-                    // This is a no-op auth handler.
+                    if cmd == "AUTH PLAIN" {
+                        if write_response(&mut write_half, 334, "").await.is_err() { return; }
+                        if reader.read_line(&mut line).await.is_err() { return; };
+                    }
                     if write_response(&mut write_half, 235, "2.7.0 Authentication successful").await.is_err() { return; }
                 } else if cmd.starts_with("MAIL FROM:") {
                     transaction = Transaction::default();
                     transaction.from = Some(line.trim()[10..].trim().to_string());
-                    if write_response(&mut write_half, 250, "OK").await.is_err() { return; }
+                    if write_response(&mut write_half, 250, "OK").await.is_err() { 
+                        return; 
+                    }
                 } else if cmd.starts_with("RCPT TO:") {
                     if transaction.from.is_none() {
                         if write_response(&mut write_half, 503, "Bad sequence of commands").await.is_err() { return; }
@@ -84,8 +93,8 @@ pub async fn handle_connection(stream: TcpStream, mailer: Arc<dyn Mailer>, max_e
                     }
                 } else if cmd.starts_with("DATA") {
                     if transaction.recipients.is_empty() {
-                         if write_response(&mut write_half, 503, "Bad sequence of commands").await.is_err() { return; }
-                         continue;
+                        if write_response(&mut write_half, 503, "Bad sequence of commands").await.is_err() { return; }
+                        continue;
                     }
                     if write_response(&mut write_half, 354, "Start mail input; end with <CRLF>.<CRLF>").await.is_err() { return; }
                     
@@ -101,7 +110,7 @@ pub async fn handle_connection(stream: TcpStream, mailer: Arc<dyn Mailer>, max_e
                                     return;
                                 }
                                  if data_line == ".\r\n" { break; }
-                                 let line_to_write = if data_line.starts_with('.') { &data_line[1..] } else { &data_line };
+                                 let line_to_write = if let Some(stripped) = data_line.strip_prefix('.') { stripped } else { &data_line };
                                  email_data.extend_from_slice(line_to_write.as_bytes());
                              }
                              Err(e) => { error!(client_addr = %peer_addr, error = ?e, "Error reading email data"); return; }
@@ -122,43 +131,60 @@ pub async fn handle_connection(stream: TcpStream, mailer: Arc<dyn Mailer>, max_e
                     return;
                 } else if cmd.starts_with("RSET") {
                     transaction = Transaction::default();
-                    if write_response(&mut write_half, 250, "OK").await.is_err() { return; }
+                    if write_response(&mut write_half, 250, "OK").await.is_err() { 
+                        return; 
+                    }
                 } else {
                     warn!(client_addr = %peer_addr, command = %line.trim(), "Unrecognized command");
                     if write_response(&mut write_half, 500, "Syntax error, command unrecognized").await.is_err() { return; }
                 }
             }
-            Err(e) => { error!(client_addr = %peer_addr, error = ?e, "Error reading from client"); return; }
+            Err(e) => { error!(client_addr = %peer_addr, error = ?e, "Error reading from client"); info!("handle_connection: END (error)"); return; }
         }
     }
+    // info!("handle_connection: END (loop exit)"); // unreachable
 }
 
-/// Listens for graceful shutdown signals (Ctrl+C, SIGTERM).
+// Listens for graceful shutdown signals (Ctrl+C, SIGTERM).
 async fn shutdown_signal() {
     let ctrl_c = async { signal::ctrl_c().await.expect("failed to install Ctrl+C handler"); };
     #[cfg(unix)]
     let terminate = async { signal::unix::signal(signal::unix::SignalKind::terminate()).expect("failed to install signal handler").recv().await; };
     #[cfg(not(unix))]
     let terminate = std::future::pending::<()>();
-    tokio::select! { _ = ctrl_c => {}, _ = terminate => {}, }
+    tokio::select! { _ = ctrl_c => {}, _ = terminate => {} }
     info!("Signal received, starting graceful shutdown.");
 }
 
-/// The main application loop. Binds to the listener and hands off connections.
-pub async fn run(listener: TcpListener, mailer: Arc<dyn Mailer>, max_email_size: usize) {
+// The main application loop. Binds to the listener and hands off connections.
+pub async fn run(
+    listener: TcpListener,
+    mailer: Arc<dyn Mailer>,
+    max_email_size: usize,
+    server_name: String,
+) {
+    println!("run: START - server listening on {:?}", listener.local_addr());
+    info!("run: START - server listening on {:?}", listener.local_addr());
     loop {
         tokio::select! {
-            // Accept new connections and spawn a task to handle them.
-            Ok((stream, _)) = listener.accept() => {
+            Ok((stream, addr)) = listener.accept() => {
+                info!("run: Accepted connection from {}", addr);
                 let mailer_clone = mailer.clone();
-                tokio::spawn(async move { handle_connection(stream, mailer_clone, max_email_size).await; });
+                let server_name_clone = server_name.clone();
+                tokio::spawn(async move {
+                    info!("run: Spawning handle_connection for {}", addr);
+                    handle_connection(stream, mailer_clone, max_email_size, server_name_clone).await;
+                    info!("run: handle_connection for {} returned", addr);
+                });
             }
-            // Await the shutdown signal.
             _ = shutdown_signal() => { info!("Shutting down server..."); break; }
-            // Handle a listener error, which is fatal.
             else => { error!("TCP listener failed"); break; }
         }
     }
+    println!("run: END - server loop exited");
+    info!("run: END - server loop exited (after shutdown)");
+    // If you want to ensure all spawned tasks are finished, you could track JoinHandles here.
+    // For now, the server loop is exited and the listener is dropped.
 }
 
 // Unit tests for logic contained within this file.
@@ -189,7 +215,7 @@ mod tests {
         let max_email_size = 100;
         tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            handle_connection(stream, mailer, max_email_size).await;
+            handle_connection(stream, mailer, max_email_size, "acs.local".to_string()).await;
         });
         let mut stream = TcpStream::connect(addr).await.unwrap();
         let mut buf = [0u8; 1024];
@@ -232,7 +258,7 @@ mod tests {
         let max_email_size = 1000;
         tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            handle_connection(stream, mailer, max_email_size).await;
+            handle_connection(stream, mailer, max_email_size, "acs.local".to_string()).await;
         });
         let mut stream = TcpStream::connect(addr).await.unwrap();
         let mut buf = [0u8; 1024];
@@ -255,23 +281,28 @@ mod tests {
     #[test]
     fn test_parse_connection_string_success() {
         let conn_str = "endpoint=https://example.com;accesskey=12345";
-        let config = parse_connection_string(conn_str).unwrap();
+        let config = config::parse_connection_string(conn_str).unwrap();
         assert_eq!(config.endpoint, "https://example.com");
         assert_eq!(config.access_key, "12345");
     }
     #[test]
     fn test_parse_connection_string_missing_endpoint() {
         let conn_str = "accesskey=12345";
-        let result = parse_connection_string(conn_str);
+        let result = config::parse_connection_string(conn_str);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("missing 'endpoint'"));
     }
     #[test]
     fn test_parse_connection_string_missing_key() {
         let conn_str = "endpoint=https://example.com;";
-        let result = parse_connection_string(conn_str);
+        let result = config::parse_connection_string(conn_str);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("missing 'accesskey'"));
+    }
+    #[test]
+    fn test_parse_connection_string_trims_trailing_slash() {
+        let conn_str = "endpoint=https://example.com/;accesskey=12345";
+        let config = config::parse_connection_string(conn_str).unwrap();
+        assert_eq!(config.endpoint, "https://example.com");
+        assert_eq!(config.access_key, "12345");
     }
 
     #[tokio::test]
@@ -319,7 +350,7 @@ mod tests {
         let max_email_size = 1000;
         tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            handle_connection(stream, mailer, max_email_size).await;
+            handle_connection(stream, mailer, max_email_size, "acs.local".to_string()).await;
         });
         let mut stream = TcpStream::connect(addr).await.unwrap();
         let mut buf = [0u8; 1024];

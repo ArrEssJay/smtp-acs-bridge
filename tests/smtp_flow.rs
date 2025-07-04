@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 
-/// Helper function to read the two-line EHLO response.
+// Helper function to read the two-line EHLO response.
 async fn read_ehlo_response(reader: &mut BufReader<io::ReadHalf<TcpStream>>) {
     let mut line_buf = String::new();
     reader.read_line(&mut line_buf).await.unwrap();
@@ -36,7 +36,7 @@ async fn test_smtp_session_flow() {
 
     tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        handle_connection(stream, mailer_arc, 10_000_000).await;
+        handle_connection(stream, mailer_arc, 10_000_000, addr.ip().to_string()).await;
     });
 
     let (read_half, mut write_half) = io::split(TcpStream::connect(addr).await.unwrap());
@@ -90,7 +90,7 @@ async fn test_smtp_auth_flow() {
 
     tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        handle_connection(stream, mailer_arc, 10_000_000).await;
+        handle_connection(stream, mailer_arc, 10_000_000, addr.ip().to_string()).await;
     });
 
     let (read_half, mut write_half) = io::split(TcpStream::connect(addr).await.unwrap());

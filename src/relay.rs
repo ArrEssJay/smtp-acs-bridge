@@ -1,4 +1,5 @@
-use anyhow::{anyhow, Context, Result};
+use crate::error::{AcsError, EmailError, SmtpRelayError};
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use chrono::Utc;
@@ -44,7 +45,7 @@ pub struct AcsEmailRequest<'a> {
 #[cfg(feature = "mocks")]
 use mockall::automock;
 
-/// A trait for sending emails, allowing for mock implementations in tests.
+// A trait for sending emails, allowing for mock implementations in tests.
 #[cfg_attr(feature = "mocks", automock)]
 #[async_trait]
 pub trait Mailer: Send + Sync {
@@ -52,7 +53,7 @@ pub trait Mailer: Send + Sync {
         -> Result<()>;
 }
 
-/// A concrete Mailer implementation for Azure Communication Services.
+// A concrete Mailer implementation for Azure Communication Services.
 pub struct AcsMailer {
     client: Client,
     api_endpoint: String,
@@ -78,7 +79,7 @@ impl AcsMailer {
         }
     }
 
-    /// Generates the necessary headers for HMAC-SHA256 authentication with the ACS API.
+    // Generates the necessary headers for HMAC-SHA256 authentication with the ACS API.
     fn sign_request(
         &self,
         method: &Method,
@@ -89,20 +90,15 @@ impl AcsMailer {
         let parsed_url = Url::parse(&full_url)?;
         let host = parsed_url.host_str().context("Endpoint URL has no host")?;
 
-        let timestamp = Utc::now().to_rfc2822();
+        // The timestamp MUST be in RFC1123 format, per Azure documentation.
+        let timestamp = Utc::now().format("%a, %d %b %Y %H:%M:%S GMT").to_string();
 
         let mut hasher = Sha256::new();
         hasher.update(body_bytes);
         let content_hash = B64.encode(hasher.finalize());
 
-        let string_to_sign = format!(
-            "{}\n{}\n{};host:{};x-ms-content-sha256:{}",
-            method.as_str(),
-            url_path,
-            timestamp,
-            host,
-            &content_hash
-        );
+        // The format MUST be VERB\nPATH\nDATE;HOST;HASH as per Azure docs.
+        let string_to_sign = format!("{}\n{}\n{};{};{}", method.as_str(), url_path, timestamp, host, &content_hash);
         info!(string_to_sign = %string_to_sign, "Generated string-to-sign for HMAC");
 
         let decoded_key = B64.decode(&self.api_key).context("Failed to decode API key")?;
@@ -118,28 +114,36 @@ impl AcsMailer {
     }
 }
 
-/// Helper function to build the ACS request payload from a parsed email.
+// Helper function to build the ACS request payload from a parsed email.
 fn build_acs_request<'a>(
     parsed_email: &'a Message,
     recipients: &'a [String],
     sender_address: &'a str,
-) -> Result<AcsEmailRequest<'a>> {
+) -> Result<AcsEmailRequest<'a>, SmtpRelayError> {
     if recipients.is_empty() {
-        return Err(anyhow!("Cannot build message with no recipients"));
+        return Err(SmtpRelayError::Email(EmailError::MissingContent));
     }
     let subject = parsed_email.subject().unwrap_or("No Subject").to_string();
 
-    let text_body = parsed_email.body_text(0).map(|s| s.trim().to_string());
-    let html_body = parsed_email.body_html(0).map(|s| s.trim().to_string());
-
-    let text_body_empty = text_body.as_ref().map_or(true, |s| s.is_empty());
-    let html_body_empty = html_body.as_ref().map_or(true, |s| {
-        let normalized = s.replace(char::is_whitespace, "");
-        normalized.is_empty() || normalized == "<html><body></body></html>"
+    // Prioritize HTML body if it exists and is not empty.
+    // Only include HTML if it's explicitly present and non-empty.
+    let html_body = parsed_email.body_html(0).and_then(|s| {
+        let trimmed = s.trim();
+        if trimmed.is_empty() || trimmed == "<html><body></body></html>" {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
     });
 
-    if text_body_empty && html_body_empty {
-        return Err(anyhow!("Email content is empty (both text and html)"));
+    // Only include plain text if a text body is present.
+    let text_body = parsed_email.body_text(0).and_then(|s| {
+        let trimmed = s.trim();
+        if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
+    });
+
+    if html_body.is_none() && text_body.is_none() {
+        return Err(SmtpRelayError::Email(EmailError::MissingContent));
     }
 
     let content = AcsEmailContent {
@@ -193,7 +197,7 @@ impl Mailer for AcsMailer {
         
         let parsed_email = MessageParser::default()
             .parse(raw_email)
-            .context("Failed to parse raw email")?;
+            .ok_or_else(|| SmtpRelayError::Email(EmailError::ParseFailed("Invalid email format".to_string())))?;
 
         info!("Building ACS request payload.");
         let request_payload = build_acs_request(&parsed_email, recipients, &sender_for_request)?;
@@ -218,9 +222,12 @@ impl Mailer for AcsMailer {
             .context("Failed to send HTTP request to ACS")?;
             
         info!(status = %response.status(), "Received response from ACS");
-        response
-            .error_for_status()
-            .context("ACS API returned an error status")?;
+        
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let body = response.text().await.unwrap_or_default();
+            return Err(SmtpRelayError::Acs(AcsError::from_status_code(status, &body)).into());
+        }
 
         info!("Successfully relayed email to ACS.");
         Ok(())
@@ -237,6 +244,6 @@ mod tests {
         let recipients = vec!["to@example.com".to_string()];
         let result = build_acs_request(&empty_message, &recipients, "sender@example.com");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Email content is empty"));
+        assert!(matches!(result.unwrap_err(), SmtpRelayError::Email(EmailError::MissingContent)));
     }
 }

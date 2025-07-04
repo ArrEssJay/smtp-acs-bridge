@@ -34,12 +34,22 @@ chrono = "0.4"
 base64 = "0.22"
 hmac = "0.12"
 sha2 = "0.10"
+
+# URL parsing and validation
 url = "2.5"
+
+# Optional health check server
+warp = { version = "0.3", optional = true }
+
+# Unix-specific dependencies for privileged port checking
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 # Optional dependency for mocking
 mockall = { version = "0.13", optional = true }
 
 [dev-dependencies]
+lettre = "0.11.17"
 # Mocking HTTP servers for integration tests
 wiremock = "0.6"
 
@@ -49,6 +59,20 @@ name = "smtp_flow"
 harness = true
 required-features = ["mocks"]
 
+[[test]]
+name = "lettre_e2e"
+harness = true
+required-features = ["mocks"]
+
+[[test]]
+name = "send_test_email"
+harness = true
+required-features = ["mocks"]
+
 [features]
 # This feature flag enables the `automock` attribute in our library code.
 mocks = ["dep:mockall"]
+# Optional health check server
+health-server = ["dep:warp"]
+# Default features
+default = []
