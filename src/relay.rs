@@ -90,7 +90,11 @@ impl AcsMailer {
         url_path: &str,
         body_bytes: &[u8],
     ) -> Result<(String, String, String)> {
-        let full_url = format!("{}{}", self.api_endpoint, url_path);
+        let full_url = format!(
+            "{api_endpoint}{url_path}",
+            api_endpoint = self.api_endpoint,
+            url_path = url_path
+        );
         let parsed_url = Url::parse(&full_url)?;
         let host = parsed_url.host_str().context("Endpoint URL has no host")?;
 
@@ -103,12 +107,12 @@ impl AcsMailer {
 
         // The format MUST be VERB\nPATH\nDATE;HOST;HASH as per Azure docs.
         let string_to_sign = format!(
-            "{}\n{}\n{};{};{}",
-            method.as_str(),
-            url_path,
-            timestamp,
-            host,
-            &content_hash
+            "{method}\n{url_path}\n{timestamp};{host};{content_hash}",
+            method = method.as_str(),
+            url_path = url_path,
+            timestamp = timestamp,
+            host = host,
+            content_hash = &content_hash
         );
         info!(string_to_sign = %string_to_sign, "Generated string-to-sign for HMAC");
 
@@ -120,8 +124,7 @@ impl AcsMailer {
         let signature = B64.encode(mac.finalize().into_bytes());
 
         let auth_header = format!(
-            "HMAC-SHA256 SignedHeaders=x-ms-date;host;x-ms-content-sha256&Signature={}",
-            signature
+            "HMAC-SHA256 SignedHeaders=x-ms-date;host;x-ms-content-sha256&Signature={signature}"
         );
         Ok((timestamp, content_hash, auth_header))
     }
@@ -221,14 +224,18 @@ impl Mailer for AcsMailer {
         let body_bytes = serde_json::to_vec(&request_payload)?;
 
         const API_VERSION: &str = "2023-03-31";
-        let url_path = format!("/emails:send?api-version={}", API_VERSION);
+        let url_path = format!("/emails:send?api-version={API_VERSION}");
         let (timestamp, content_hash, auth_header) =
             self.sign_request(&Method::POST, &url_path, &body_bytes)?;
 
         info!(url = %self.api_endpoint, sender = %sender_for_request, "Sending signed request to ACS API.");
         let response = self
             .client
-            .post(format!("{}{}", self.api_endpoint, url_path))
+            .post(format!(
+                "{api_endpoint}{url_path}",
+                api_endpoint = self.api_endpoint,
+                url_path = url_path
+            ))
             .header("x-ms-date", timestamp)
             .header("x-ms-content-sha256", content_hash)
             .header(header::AUTHORIZATION, auth_header)

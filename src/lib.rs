@@ -30,7 +30,7 @@ async fn write_response(
     code: u16,
     text: &str,
 ) -> Result<()> {
-    let response = format!("{} {}\r\n", code, text);
+    let response = format!("{code} {text}\r\n");
     stream.write_all(response.as_bytes()).await?;
     info!(client_response = %response.trim(), "Sent response");
     Ok(())
@@ -87,7 +87,7 @@ pub async fn handle_connection(
                     }
                 } else if cmd.starts_with("EHLO") {
                     transaction = Transaction::default();
-                    let ehlo_response = format!("250-{}\r\n250 AUTH PLAIN LOGIN\r\n", server_name);
+                    let ehlo_response = format!("250-{server_name}\r\n250 AUTH PLAIN LOGIN\r\n");
                     if write_half
                         .write_all(ehlo_response.as_bytes())
                         .await

@@ -66,11 +66,11 @@ pub enum NetworkError {
 impl fmt::Display for SmtpRelayError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SmtpRelayError::Config(e) => write!(f, "Configuration error: {}", e),
-            SmtpRelayError::Smtp(e) => write!(f, "SMTP protocol error: {}", e),
-            SmtpRelayError::Acs(e) => write!(f, "Azure Communication Services error: {}", e),
-            SmtpRelayError::Email(e) => write!(f, "Email processing error: {}", e),
-            SmtpRelayError::Network(e) => write!(f, "Network error: {}", e),
+            SmtpRelayError::Config(e) => write!(f, "Configuration error: {e}"),
+            SmtpRelayError::Smtp(e) => write!(f, "SMTP protocol error: {e}"),
+            SmtpRelayError::Acs(e) => write!(f, "Azure Communication Services error: {e}"),
+            SmtpRelayError::Email(e) => write!(f, "Email processing error: {e}"),
+            SmtpRelayError::Network(e) => write!(f, "Network error: {e}"),
         }
     }
 }
@@ -78,16 +78,12 @@ impl fmt::Display for SmtpRelayError {
 impl fmt::Display for ConfigError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ConfigError::InvalidConnectionString(s) => {
-                write!(f, "Invalid connection string: {}", s)
-            }
             ConfigError::MissingEndpoint => write!(f, "Missing endpoint in connection string"),
             ConfigError::MissingAccessKey => write!(f, "Missing access key in connection string"),
-            ConfigError::InvalidSenderAddress(addr) => {
-                write!(f, "Invalid sender address: {}", addr)
-            }
-            ConfigError::InvalidDomain(domain) => write!(f, "Invalid domain: {}", domain),
-            ConfigError::InvalidPort(port) => write!(f, "Invalid port: {}", port),
+            ConfigError::InvalidConnectionString(s) => write!(f, "Invalid connection string: {s}"),
+            ConfigError::InvalidSenderAddress(addr) => write!(f, "Invalid sender address: {addr}"),
+            ConfigError::InvalidDomain(domain) => write!(f, "Invalid domain: {domain}"),
+            ConfigError::InvalidPort(port) => write!(f, "Invalid port: {port}"),
         }
     }
 }
@@ -95,15 +91,15 @@ impl fmt::Display for ConfigError {
 impl fmt::Display for SmtpError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SmtpError::InvalidCommand(cmd) => write!(f, "Invalid SMTP command: {}", cmd),
-            SmtpError::InvalidSequence(seq) => write!(f, "Invalid command sequence: {}", seq),
+            SmtpError::InvalidCommand(cmd) => write!(f, "Invalid SMTP command: {cmd}"),
+            SmtpError::InvalidSequence(seq) => write!(f, "Invalid command sequence: {seq}"),
             SmtpError::MessageTooLarge(actual, max) => {
-                write!(f, "Message too large: {} bytes (max: {})", actual, max)
+                write!(f, "Message too large: {actual} bytes (max: {max})")
             }
-            SmtpError::InvalidAddress(addr) => write!(f, "Invalid email address: {}", addr),
+            SmtpError::InvalidAddress(addr) => write!(f, "Invalid email address: {addr}"),
             SmtpError::MissingFrom => write!(f, "Missing MAIL FROM command"),
             SmtpError::NoRecipients => write!(f, "No recipients specified"),
-            SmtpError::DataCorrupted => write!(f, "Email data corrupted during transmission"),
+            SmtpError::DataCorrupted => write!(f, "DATA section corrupted"),
         }
     }
 }
@@ -111,12 +107,12 @@ impl fmt::Display for SmtpError {
 impl fmt::Display for AcsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            AcsError::ApiRequest(msg) => write!(f, "API request failed: {}", msg),
-            AcsError::AuthenticationFailed => write!(f, "Authentication with ACS failed"),
-            AcsError::Unauthorized => write!(f, "Unauthorized access to ACS"),
-            AcsError::RateLimited => write!(f, "Rate limited by ACS"),
-            AcsError::ServiceUnavailable => write!(f, "ACS service temporarily unavailable"),
-            AcsError::InvalidResponse(resp) => write!(f, "Invalid response from ACS: {}", resp),
+            AcsError::AuthenticationFailed => write!(f, "Authentication failed (401)"),
+            AcsError::Unauthorized => write!(f, "Unauthorized (403)"),
+            AcsError::RateLimited => write!(f, "Rate limited (429)"),
+            AcsError::ServiceUnavailable => write!(f, "Service unavailable (5xx)"),
+            AcsError::ApiRequest(msg) => write!(f, "API request failed: {msg}"),
+            AcsError::InvalidResponse(resp) => write!(f, "Invalid response from ACS: {resp}"),
         }
     }
 }
@@ -124,11 +120,11 @@ impl fmt::Display for AcsError {
 impl fmt::Display for EmailError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            EmailError::ParseFailed(msg) => write!(f, "Failed to parse email: {}", msg),
-            EmailError::MissingSubject => write!(f, "Email missing subject"),
-            EmailError::MissingContent => write!(f, "Email missing content"),
-            EmailError::InvalidEncoding(enc) => write!(f, "Invalid encoding: {}", enc),
-            EmailError::UnsupportedContentType(ct) => write!(f, "Unsupported content type: {}", ct),
+            EmailError::ParseFailed(msg) => write!(f, "Failed to parse email: {msg}"),
+            EmailError::MissingSubject => write!(f, "Missing subject in email"),
+            EmailError::MissingContent => write!(f, "Missing content in email"),
+            EmailError::InvalidEncoding(enc) => write!(f, "Invalid encoding: {enc}"),
+            EmailError::UnsupportedContentType(ct) => write!(f, "Unsupported content type: {ct}"),
         }
     }
 }
@@ -137,9 +133,9 @@ impl fmt::Display for NetworkError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             NetworkError::ConnectionLost => write!(f, "Connection lost"),
-            NetworkError::Timeout => write!(f, "Operation timed out"),
-            NetworkError::DnsResolution(host) => write!(f, "DNS resolution failed for: {}", host),
-            NetworkError::TlsHandshake(msg) => write!(f, "TLS handshake failed: {}", msg),
+            NetworkError::Timeout => write!(f, "Network timeout"),
+            NetworkError::DnsResolution(host) => write!(f, "DNS resolution failed for: {host}"),
+            NetworkError::TlsHandshake(msg) => write!(f, "TLS handshake failed: {msg}"),
         }
     }
 }
@@ -166,7 +162,7 @@ impl AcsError {
             403 => AcsError::Unauthorized,
             429 => AcsError::RateLimited,
             502..=504 => AcsError::ServiceUnavailable,
-            _ => AcsError::ApiRequest(format!("HTTP {}: {}", status, body)),
+            _ => AcsError::ApiRequest(format!("HTTP {status}: {body}")),
         }
     }
 }
