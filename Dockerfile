@@ -1,12 +1,13 @@
 # syntax=docker/dockerfile:1
 
 # Build stage
-FROM rust:1.77-slim as builder
+FROM rust:1.88-slim as builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -14,47 +15,49 @@ WORKDIR /app
 # Copy dependency files first for better caching
 COPY Cargo.toml Cargo.lock ./
 
-# Create a dummy main.rs to cache dependencies
+# Create minimal Cargo.toml for dependency caching (remove test declarations)
+RUN sed '/^\[\[test\]\]/,/^$/d' Cargo.toml > Cargo.minimal.toml && \
+    mv Cargo.minimal.toml Cargo.toml
+
+# Create dummy source and fetch dependencies
 RUN mkdir src && \
     echo "fn main() {}" > src/main.rs && \
-    cargo build --release && \
-    rm -rf src target/release/deps/acs_smtp_relay*
+    cargo fetch && \
+    rm -rf src
 
-# Copy the actual source code
+# Copy the real Cargo.toml and source
+COPY Cargo.toml ./
 COPY src ./src
 COPY tests ./tests
 
-# Build the actual application
-RUN cargo build --release
+# Build with optimizations
+RUN cargo build --release --locked && \
+    strip target/release/acs-smtp-relay
 
 # Runtime stage
-FROM debian:bookworm-slim
+FROM gcr.io/distroless/cc-debian12
 
-# Install runtime dependencies
-RUN apt-get update && apt-get install -y \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
-# Create non-root user
-RUN useradd -r -s /bin/false -m -d /app smtp-relay
+# Metadata for Azure Container Registry
+LABEL org.opencontainers.image.source="https://github.com/ArrEssJay/smtp-acs-bridge/"
+LABEL org.opencontainers.image.description="SMTP to Azure Communication Services relay"
+LABEL org.opencontainers.image.vendor="Rowan Jones"
+LABEL org.opencontainers.image.title="SMTP-ACS-Bridge"
+LABEL org.opencontainers.image.licenses="MIT"
 
 WORKDIR /app
 
-# Copy the binary from builder stage
-COPY --from=builder /app/target/release/acs-smtp-relay .
+# Copy the optimized binary
+COPY --from=builder /app/target/release/acs-smtp-relay ./acs-smtp-relay
 
-# Change ownership to non-root user
-RUN chown smtp-relay:smtp-relay /app/acs-smtp-relay
+# Use non-root user (required for Azure security policies)
+USER nonroot:nonroot
 
-# Switch to non-root user
-USER smtp-relay
+# Environment variables for Azure deployment
+ENV RUST_LOG=info
+ENV LISTEN_ADDR=0.0.0.0:1025
 
 # Expose SMTP port
 EXPOSE 1025
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD timeout 5 bash -c '</dev/tcp/localhost/1025' || exit 1
-
-# Set the binary as entrypoint
+# Azure-compatible entrypoint
 ENTRYPOINT ["./acs-smtp-relay"]
