@@ -1,42 +1,60 @@
-# ---- Builder Stage ----
-FROM rust:1.88-slim-bookworm AS builder
+# syntax=docker/dockerfile:1
 
-# Update all system packages and install build-time dependencies needed for linking.
-RUN apt-get update && apt-get upgrade -y && apt-get install -y libssl-dev pkg-config && rm -rf /var/lib/apt/lists/*
+# Build stage
+FROM rust:1.77-slim as builder
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy over your manifests to cache dependencies.
+# Copy dependency files first for better caching
 COPY Cargo.toml Cargo.lock ./
 
-# FIX: Create a complete dummy project structure that satisfies all targets
-# defined in Cargo.toml, including the integration test.
-RUN mkdir -p src tests && \
-    echo "pub fn lib() {}" > src/lib.rs && \
-    echo "fn main() { acs_smtp_relay::lib(); }" > src/main.rs && \
-    echo "#[test] fn an_empty_test() {}" > tests/smtp_flow.rs && \
-    cargo test --no-run --all-features && \
-    rm -rf src tests
+# Create a dummy main.rs to cache dependencies
+RUN mkdir src && \
+    echo "fn main() {}" > src/main.rs && \
+    cargo build --release && \
+    rm -rf src target/release/deps/acs_smtp_relay*
 
-# Copy your actual source code. This will be much faster now.
+# Copy the actual source code
 COPY src ./src
 COPY tests ./tests
 
-# Build the final release binary. This step will use the cached dependencies.
+# Build the actual application
 RUN cargo build --release
 
-# ---- Runtime Stage ----
-FROM gcr.io/distroless/cc-debian12
+# Runtime stage
+FROM debian:bookworm-slim
 
-LABEL org.opencontainers.image.description="SMTP to Azure Communication Services relay. See README for details."
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN useradd -r -s /bin/false -m -d /app smtp-relay
 
 WORKDIR /app
 
-# Copy the compiled binary from the builder stage.
+# Copy the binary from builder stage
 COPY --from=builder /app/target/release/acs-smtp-relay .
 
-# Set a non-root user for security. This user is built-in to distroless images.
-USER nonroot:nonroot
+# Change ownership to non-root user
+RUN chown smtp-relay:smtp-relay /app/acs-smtp-relay
 
-# Run the binary when the container starts.
-CMD ["./acs-smtp-relay"]
+# Switch to non-root user
+USER smtp-relay
+
+# Expose SMTP port
+EXPOSE 1025
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD timeout 5 bash -c '</dev/tcp/localhost/1025' || exit 1
+
+# Set the binary as entrypoint
+ENTRYPOINT ["./acs-smtp-relay"]

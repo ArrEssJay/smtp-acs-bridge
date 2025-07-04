@@ -1,0 +1,41 @@
+# Git
+.git
+.gitignore
+
+# Documentation
+README.md
+CHANGELOG.md
+REVIEW_COMPLETE.md
+ENHANCEMENTS.md
+docs/
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Rust
+target/
+
+# Docker
+Dockerfile*
+.dockerignore
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.local
+
+# Workspace files
+smtp-acs-bridge.code-workspace
