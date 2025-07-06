@@ -43,6 +43,9 @@ sha2 = "0.10"
 # URL parsing and validation
 url = "2.5"
 
+# For unique connection IDs
+nanoid = "0.4"
+
 # Optional health check server
 warp = { version = "0.3", optional = true }
 

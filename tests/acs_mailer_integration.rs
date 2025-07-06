@@ -42,7 +42,7 @@ async fn test_acs_mailer_sends_correct_request() {
                     "EXPECTED BODY:\n{}",
                     serde_json::to_string_pretty(&expected_body).unwrap()
                 );
-                println!("\nACTUAL BODY:\n{}", body_str);
+                println!("\nACTUAL BODY:\n{body_str}");
                 println!("--- END UNMATCHED REQUEST ---\n");
                 ResponseTemplate::new(404)
             }
@@ -77,7 +77,7 @@ async fn test_acs_mailer_sends_correct_request() {
     let result = mailer.send(raw_email, &recipients, &from).await;
 
     // Assert
-    assert!(result.is_ok(), "AcsMailer::send error: {:?}", result);
+    assert!(result.is_ok(), "AcsMailer::send error: {result:?}");
     server.verify().await;
 }
 
@@ -131,6 +131,6 @@ async fn test_acs_mailer_sender_override() {
     let result = mailer.send(raw_email, &recipients, &from).await;
 
     // Assert
-    assert!(result.is_ok(), "AcsMailer::send error: {:?}", result);
+    assert!(result.is_ok(), "AcsMailer::send error: {result:?}");
     server.verify().await;
 }
