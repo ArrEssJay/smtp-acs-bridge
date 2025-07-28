@@ -19,7 +19,7 @@ pub use metrics::MetricsCollector;
 use relay::Mailer;
 
 // Represents the state of a single SMTP transaction (one email).
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)] // Added Debug for easier logging
 struct Transaction {
     from: Option<String>,
     recipients: Vec<String>,
@@ -56,12 +56,15 @@ pub async fn handle_connection(
     let (read_half, mut write_half) = io::split(stream);
     let mut reader = BufReader::new(read_half);
     let mut line = String::new();
+
     if write_response(&mut write_half, 220, &format!("{server_name} ESMTP ready"))
         .await
         .is_err()
     {
+        error!("Failed to send initial 220 response, closing connection.");
         return;
     }
+
     let mut transaction = Transaction::default();
     loop {
         line.clear();
@@ -72,44 +75,76 @@ pub async fn handle_connection(
             }
             Ok(_) => {
                 let cmd = line.trim().to_uppercase();
-                if cmd.starts_with("EHLO") || cmd.starts_with("HELO") {
-                    if write_response(&mut write_half, 250, "OK").await.is_err() {
+                tracing::debug!(raw_command = %line.trim(), "Received command");
+
+                // RFC-compliant EHLO/HELO/AUTH/NOOP/RSET handling
+                if cmd.starts_with("EHLO") {
+                    let ehlo_response = format!(
+                        "250-{server_name}\r\n\
+250-AUTH PLAIN\r\n\
+250-SIZE {max_email_size}\r\n\
+250 HELP"
+                    );
+                    let response = format!("{ehlo_response}\r\n");
+                    if write_half.write_all(response.as_bytes()).await.is_err() {
+                        return;
+                    }
+                    info!(client_response = %ehlo_response.replace("\r\n", " | "), "Sent EHLO response");
+                } else if cmd.starts_with("HELO") {
+                    if write_response(&mut write_half, 250, &server_name)
+                        .await
+                        .is_err()
+                    {
                         return;
                     }
                 } else if cmd.starts_with("AUTH") {
-                    if cmd == "AUTH PLAIN" {
-                        if write_response(&mut write_half, 334, "").await.is_err() {
-                            return;
+                    // SECURITY NOTE:
+                    // This SMTP server advertises and accepts AUTH PLAIN for compatibility with clients and RFC compliance.
+                    // However, it does NOT validate or check the provided credentials in any way.
+                    // Any username/password is accepted and the server always responds with 235 Authentication successful.
+                    // This is intentional: authentication and access control are expected to be enforced at the network level
+                    // (e.g., via Kubernetes NetworkPolicy, firewalls, or private VPC endpoints). Do NOT expose this server to untrusted networks.
+                    tracing::debug!("Handling AUTH command");
+                    if cmd.starts_with("AUTH PLAIN") {
+                        // Two-step: "AUTH PLAIN"
+                        if cmd == "AUTH PLAIN" {
+                            if write_response(&mut write_half, 334, "").await.is_err() {
+                                return;
+                            }
+                            line.clear();
+                            if reader.read_line(&mut line).await.is_err() {
+                                return;
+                            }
+                            tracing::debug!("Received AUTH PLAIN payload after challenge.");
                         }
-                        if reader.read_line(&mut line).await.is_err() {
-                            return;
-                        }
+                        // For both one-step and two-step, accept the auth
                         if write_response(&mut write_half, 235, "Authentication successful")
                             .await
                             .is_err()
                         {
                             return;
                         }
-                    } else if write_response(
-                        &mut write_half,
-                        504,
-                        "Unrecognized authentication type",
-                    )
-                    .await
-                    .is_err()
-                    {
-                        return;
+                    } else {
+                        warn!(auth_command=%cmd, "Unsupported AUTH mechanism offered by client");
+                        if write_response(&mut write_half, 504, "Unsupported authentication type")
+                            .await
+                            .is_err()
+                        {
+                            return;
+                        }
                     }
                 } else if cmd.starts_with("MAIL FROM:") {
-                    transaction = Transaction::default();
+                    transaction = Transaction::default(); // Start new transaction
                     let from_addr = line.trim()[10..].trim();
                     transaction.from =
                         Some(from_addr.trim_matches(|c| c == '<' || c == '>').to_string());
+                    tracing::debug!(?transaction, "Started new transaction");
                     if write_response(&mut write_half, 250, "OK").await.is_err() {
                         return;
                     }
                 } else if cmd.starts_with("RCPT TO:") {
                     if transaction.from.is_none() {
+                        warn!(?transaction, "RCPT TO received before MAIL FROM");
                         let _ =
                             write_response(&mut write_half, 503, "Bad sequence of commands").await;
                         return;
@@ -118,22 +153,26 @@ pub async fn handle_connection(
                         transaction
                             .recipients
                             .push(rcpt_addr.trim_matches(|c| c == '<' || c == '>').to_string());
+                        tracing::debug!(?transaction, "Added recipient");
                         if write_response(&mut write_half, 250, "OK").await.is_err() {
                             return;
                         }
                     }
                 } else if cmd == "DATA" {
                     if transaction.from.is_none() || transaction.recipients.is_empty() {
+                        warn!(?transaction, "DATA received with incomplete transaction");
                         let _ =
                             write_response(&mut write_half, 503, "Bad sequence of commands").await;
                         return;
                     }
+
                     if write_response(&mut write_half, 354, "End data with <CR><LF>.<CR><LF>")
                         .await
                         .is_err()
                     {
                         return;
                     }
+
                     let mut email_data = Vec::new();
                     loop {
                         let mut data_line = String::new();
@@ -155,9 +194,10 @@ pub async fn handle_connection(
                                         "Email size exceeds maximum limit"
                                     );
                                     let _ = write_response(&mut write_half, 552, "Requested mail action aborted: exceeded storage allocation").await;
-                                    return;
+                                    return; // Abort connection on oversize
                                 }
                                 if data_line == ".\r\n" {
+                                    tracing::debug!("End of DATA marker found");
                                     break;
                                 }
                                 let line_to_write =
@@ -178,6 +218,12 @@ pub async fn handle_connection(
                             }
                         }
                     }
+
+                    tracing::debug!(
+                        email_size = email_data.len(),
+                        "Finished receiving email data. Relaying..."
+                    );
+
                     let parsed_email = mail_parser::MessageParser::default().parse(&email_data);
                     let subject = parsed_email
                         .as_ref()
@@ -187,18 +233,15 @@ pub async fn handle_connection(
                         .as_ref()
                         .and_then(|p| p.message_id())
                         .unwrap_or("N/A");
-                    info!(
-                        email_size = email_data.len(),
-                        subject = %subject,
-                        message_id = %message_id,
-                        "Received email data. Relaying..."
-                    );
+
+                    info!(email_size = email_data.len(), %subject, %message_id, "Received email data. Relaying...");
+
                     match mailer
                         .send(&email_data, &transaction.recipients, &transaction.from)
                         .await
                     {
                         Ok(_) => {
-                            info!(subject = %subject, message_id = %message_id, "Successfully relayed email");
+                            info!(%subject, %message_id, "Successfully relayed email");
                             if write_response(&mut write_half, 250, "OK: Queued for delivery")
                                 .await
                                 .is_err()
@@ -207,7 +250,7 @@ pub async fn handle_connection(
                             }
                         }
                         Err(e) => {
-                            error!(error = ?e, subject = %subject, message_id = %message_id, "Failed to relay email");
+                            error!(error = ?e, %subject, %message_id, "Failed to relay email");
                             if write_response(
                                 &mut write_half,
                                 451,
@@ -220,7 +263,20 @@ pub async fn handle_connection(
                             }
                         }
                     }
+                    transaction = Transaction::default(); // Reset for next email
+                } else if cmd == "QUIT" {
+                    tracing::debug!("Client sent QUIT");
+                    let _ = write_response(&mut write_half, 221, "Bye").await;
+                    return; // Close the connection
+                } else if cmd == "NOOP" {
+                    if write_response(&mut write_half, 250, "OK").await.is_err() {
+                        return;
+                    }
+                } else if cmd == "RSET" {
                     transaction = Transaction::default();
+                    if write_response(&mut write_half, 250, "OK").await.is_err() {
+                        return;
+                    }
                 } else {
                     warn!(command = %line.trim(), "Unrecognized command");
                     if write_response(&mut write_half, 500, "Syntax error, command unrecognized")

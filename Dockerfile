@@ -31,7 +31,7 @@ COPY src ./src
 COPY tests ./tests
 
 # Build with optimizations
-RUN cargo build --release --locked && \
+RUN cargo build --release --locked --features health-server && \
     strip target/release/acs-smtp-relay
 
 # Runtime stage

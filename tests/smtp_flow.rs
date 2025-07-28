@@ -4,16 +4,21 @@ use std::sync::Arc;
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 
-// Helper function to read the two-line EHLO response.
+// Helper function to read the potentially multi-line EHLO response.
 async fn read_ehlo_response(reader: &mut BufReader<io::ReadHalf<TcpStream>>) {
     let mut line_buf = String::new();
-    reader.read_line(&mut line_buf).await.unwrap();
-    // Assert the first line has a hyphen
-    assert!(line_buf.starts_with("250-"));
-    line_buf.clear();
-    reader.read_line(&mut line_buf).await.unwrap();
-    // Assert the last line has a space
-    assert!(line_buf.starts_with("250 "));
+    loop {
+        line_buf.clear();
+        reader.read_line(&mut line_buf).await.unwrap();
+        // The last line of the response starts with '250 ', so we're done.
+        if line_buf.starts_with("250 ") {
+            return;
+        }
+        // Any intermediate line must start with '250-'.
+        if !line_buf.starts_with("250-") {
+            panic!("Unexpected EHLO response line: {}", line_buf);
+        }
+    }
 }
 
 #[tokio::test]
@@ -25,8 +30,8 @@ async fn test_smtp_session_flow() {
         .expect_send()
         .withf(move |data, recipients, from| {
             data == raw_email_body.as_bytes()
-                && recipients == ["<to@example.com>"]
-                && from.as_deref() == Some("<from@example.com>")
+                && recipients == ["to@example.com"]
+                && from.as_deref() == Some("from@example.com")
         })
         .times(1)
         .returning(|_, _, _| Ok(()));

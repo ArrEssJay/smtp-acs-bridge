@@ -98,33 +98,56 @@ The server implements these SMTP commands:
 
 ## Testing
 
-### Unit Tests
+This project uses a combination of unit, integration, and manual tests to ensure correctness and reliability.
+
+### Running All Automated Tests
+
+To run the complete suite of automated tests, exactly as they are run in the CI pipeline, use the following command. This includes all unit tests and the integration tests that use mock services.
 
 ```bash
-cargo test
+cargo test --all-features
 ```
 
-### Integration Tests
+### Test Categories
 
-```bash
-cargo test --features mocks
-```
+The tests are organized into several categories:
 
-### Manual Testing
+#### 1. Unit Tests
 
-Start the server:
-```bash
-ACS_CONNECTION_STRING="your-connection-string" \
-ACS_SENDER_ADDRESS="noreply@yourdomain.com" \
-cargo run
-```
+-   **Location:** Inside `src/` modules, within `#[cfg(test)]` blocks.
+-   **Purpose:** To test individual functions and components in isolation (e.g., configuration parsing, metrics calculations).
+-   **How to Run Separately:** `cargo test`
 
-Send a test email:
-```bash
-RECIPIENT_EMAIL="test@example.com" \
-ACS_SENDER_ADDRESS="noreply@yourdomain.com" \
-cargo test --test send_test_email --features mocks -- --ignored --nocapture
-```
+#### 2. Integration Tests
+
+-   **Location:** The `tests/` directory.
+-   **Purpose:** To test how different parts of the application work together. These require the `mocks` feature flag, which is enabled by `--all-features`.
+-   **Key Tests:**
+    -   `smtp_flow.rs`: Verifies the SMTP command flow (`EHLO`, `MAIL FROM`, `DATA`, etc.) is handled correctly by the server. It uses a **mock mailer** to isolate the SMTP protocol logic from the Azure API.
+    -   `acs_mailer_integration.rs`: Tests the `AcsMailer` struct's ability to correctly format and sign requests for the Azure API. It uses **`wiremock`** to simulate the Azure API endpoint, ensuring our HTTP requests are correct.
+    -   `lettre_e2e.rs`: A full end-to-end test that starts the relay server and uses the `lettre` SMTP client to send an email through it to a **mocked Azure API**. This is the most comprehensive automated test, validating the entire chain from SMTP client to ACS request generation.
+
+#### 3. Manual End-to-End Test
+
+-   **File:** `tests/send_test_email.rs`
+-   **Purpose:** To perform a true end-to-end test by sending an email through a running instance of the relay to the **real Azure Communication Services API**. This test is ignored by default (`#[ignore]`) and is intended for manual validation against a live environment.
+
+##### **How to Run the Manual Test:**
+
+1.  **Start the relay server** in one terminal, configured with your real Azure credentials:
+    ```bash
+    ACS_CONNECTION_STRING="endpoint=https://...;accesskey=..." \
+    ACS_SENDER_ADDRESS="DoNotReply@your-domain.com" \
+    cargo run
+    ```
+
+2.  **In a second terminal, run the specific test** with the required environment variables. Note that `SMTP_USER` and `SMTP_PASS` can be dummy values as they are not validated by the relay.
+    ```bash
+    SMTP_USER="user" SMTP_PASS="pass" \
+    RECIPIENT_EMAIL="your-test-recipient@example.com" \
+    ACS_SENDER_ADDRESS="DoNotReply@your-domain.com" \
+    cargo test --test send_test_email --features mocks -- --ignored --nocapture
+    ```
 
 ## Health Checks
 

@@ -1,9 +1,12 @@
+#[cfg(feature = "health-server")]
+use acs_smtp_relay::health;
 use acs_smtp_relay::relay::{AcsMailer, Mailer};
 use acs_smtp_relay::{metrics, run, Config, MetricsCollector};
 use anyhow::{Context, Result};
 use std::env;
 use std::net::SocketAddr;
 use std::sync::Arc;
+#[cfg(not(feature = "health-server"))]
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tracing_subscriber::{fmt, EnvFilter};
@@ -84,18 +87,33 @@ async fn main() -> Result<(), anyhow::Error> {
         std::time::Duration::from_secs(300),
     );
 
-    // --- Start the silent health check server ---
-    let health_listener = TcpListener::bind(health_bind_address).await?;
-    tracing::info!(health_addr = %health_listener.local_addr()?, "Starting silent health check server");
-    tokio::spawn(async move {
-        loop {
-            if let Ok((mut stream, _)) = health_listener.accept().await {
-                // This is a health check. Accept, write a minimal OK, and immediately close. No logging.
-                let _ = stream.write_all(b"HTTP/1.1 200 OK\r\n\r\n").await;
-                let _ = stream.shutdown().await;
+    // --- Start the health check server ---
+    #[cfg(feature = "health-server")]
+    {
+        tracing::info!(health_addr = %health_bind_address, "Starting warp-based HTTP health check server");
+        let metrics_collector = metrics_collector.clone();
+        tokio::spawn(async move {
+            if let Err(e) =
+                health::start_health_server(health_bind_address, metrics_collector).await
+            {
+                tracing::error!(error = ?e, "Health check server failed");
             }
-        }
-    });
+        });
+    }
+    #[cfg(not(feature = "health-server"))]
+    {
+        let health_listener = TcpListener::bind(health_bind_address).await?;
+        tracing::info!(health_addr = %health_listener.local_addr()?, "Starting silent health check server");
+        tokio::spawn(async move {
+            loop {
+                if let Ok((mut stream, _)) = health_listener.accept().await {
+                    // This is a health check. Accept, write a minimal OK, and immediately close. No logging.
+                    let _ = stream.write_all(b"HTTP/1.1 200 OK\r\n\r\n").await;
+                    let _ = stream.shutdown().await;
+                }
+            }
+        });
+    }
 
     // --- Start the main SMTP server ---
     let smtp_listener = TcpListener::bind(config.smtp_bind_address).await?;

@@ -1,3 +1,4 @@
+use acs_smtp_relay::error::{AcsError, SmtpRelayError};
 use acs_smtp_relay::relay::{AcsMailer, Mailer};
 use base64::Engine;
 use wiremock::matchers::{body_json, method, path, query_param};
@@ -133,4 +134,40 @@ async fn test_acs_mailer_sender_override() {
     // Assert
     assert!(result.is_ok(), "AcsMailer::send error: {result:?}");
     server.verify().await;
+}
+
+#[tokio::test]
+async fn test_acs_mailer_handles_429_too_many_requests() {
+    // Arrange: Mock server returning 429
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/emails:send"))
+        .respond_with(ResponseTemplate::new(429))
+        .mount(&server)
+        .await;
+
+    let http_client = reqwest::Client::new();
+    let access_key = base64::engine::general_purpose::STANDARD.encode("dummy_key");
+    let mailer = AcsMailer::new(
+        http_client,
+        server.uri(),
+        access_key,
+        "default@sender.com".to_string(),
+        None,
+    );
+
+    let raw_email = "Subject: Test\r\n\r\nThis will fail due to rate limiting.".as_bytes();
+    let recipients = vec!["to@example.com".to_string()];
+
+    // Act
+    let result = mailer.send(raw_email, &recipients, &None).await;
+
+    // Assert
+    assert!(result.is_err(), "Expected send to fail");
+    let error = result.unwrap_err();
+    let root_cause = error.root_cause().downcast_ref::<SmtpRelayError>().unwrap();
+    assert!(matches!(
+        root_cause,
+        SmtpRelayError::Acs(AcsError::RateLimited)
+    ));
 }
