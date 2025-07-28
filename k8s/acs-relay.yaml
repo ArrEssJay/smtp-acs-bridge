@@ -50,14 +50,18 @@ spec:
           ports:
             - name: smtp
               containerPort: 1025
+            - name: health
+              containerPort: 9090
           livenessProbe:
-            tcpSocket:
-              port: smtp
+            httpGet:
+              path: /
+              port: health
             initialDelaySeconds: 15
             periodSeconds: 20
           readinessProbe:
-            tcpSocket:
-              port: smtp
+            httpGet:
+              path: /
+              port: health
             initialDelaySeconds: 5
             periodSeconds: 10
           env:

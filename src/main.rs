@@ -1,10 +1,13 @@
+#[cfg(feature = "health-server")]
+use acs_smtp_relay::health;
 use acs_smtp_relay::relay::{AcsMailer, Mailer};
 use acs_smtp_relay::{metrics, run, Config, MetricsCollector};
 use anyhow::{Context, Result};
 use std::env;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
+#[cfg(not(feature = "health-server"))]
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tracing_subscriber::{fmt, EnvFilter};
 
@@ -23,10 +26,12 @@ async fn main() -> Result<(), anyhow::Error> {
     let sender_address =
         env::var("ACS_SENDER_ADDRESS").context("ACS_SENDER_ADDRESS must be set")?;
     let listen_addr = env::var("LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:1025".to_string());
+    let health_listen_addr =
+        env::var("HEALTH_LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:9090".to_string());
     let max_email_size = env::var("MAX_EMAIL_SIZE")
         .unwrap_or_else(|_| "25485760".to_string()) // Default to 25MB
         .parse::<usize>()
-        .context("Failed to parse MAX_EMAIL_SIZE as an integer")?;
+        .context("Failed to parse MAX_EMAIL_SIZE as usize")?;
 
     let allowed_sender_domains = env::var("ACS_ALLOWED_SENDER_DOMAINS")
         .ok()
@@ -36,6 +41,9 @@ async fn main() -> Result<(), anyhow::Error> {
     let smtp_bind_address: SocketAddr = listen_addr
         .parse()
         .context("Failed to parse LISTEN_ADDR as a socket address")?;
+    let health_bind_address: SocketAddr = health_listen_addr
+        .parse()
+        .context("Failed to parse HEALTH_LISTEN_ADDR as a socket address")?;
 
     // Create and validate configuration
     let mut config = Config::new(
@@ -57,8 +65,8 @@ async fn main() -> Result<(), anyhow::Error> {
     // Create HTTP client with connection pooling
     let http_client = reqwest::Client::builder()
         .pool_max_idle_per_host(10)
-        .pool_idle_timeout(Duration::from_secs(90))
-        .timeout(Duration::from_secs(30))
+        .pool_idle_timeout(std::time::Duration::from_secs(90))
+        .timeout(std::time::Duration::from_secs(30))
         .build()
         .context("Failed to create HTTP client")?;
 
@@ -74,28 +82,54 @@ async fn main() -> Result<(), anyhow::Error> {
     let metrics_collector = MetricsCollector::new();
 
     // Start metrics logging every 5 minutes
-    metrics::start_metrics_logger(metrics_collector.clone(), Duration::from_secs(300));
+    metrics::start_metrics_logger(
+        metrics_collector.clone(),
+        std::time::Duration::from_secs(300),
+    );
 
-    let listener = TcpListener::bind(config.smtp_bind_address).await?;
-    // Get the actual address the listener is bound to.
-    let actual_addr = listener.local_addr()?;
+    // --- Start the health check server ---
+    #[cfg(feature = "health-server")]
+    {
+        tracing::info!(health_addr = %health_bind_address, "Starting warp-based HTTP health check server");
+        let metrics_collector = metrics_collector.clone();
+        tokio::spawn(async move {
+            if let Err(e) =
+                health::start_health_server(health_bind_address, metrics_collector).await
+            {
+                tracing::error!(error = ?e, "Health check server failed");
+            }
+        });
+    }
+    #[cfg(not(feature = "health-server"))]
+    {
+        let health_listener = TcpListener::bind(health_bind_address).await?;
+        tracing::info!(health_addr = %health_listener.local_addr()?, "Starting silent health check server");
+        tokio::spawn(async move {
+            loop {
+                if let Ok((mut stream, _)) = health_listener.accept().await {
+                    // This is a health check. Accept, write a minimal OK, and immediately close. No logging.
+                    let _ = stream.write_all(b"HTTP/1.1 200 OK\r\n\r\n").await;
+                    let _ = stream.shutdown().await;
+                }
+            }
+        });
+    }
+
+    // --- Start the main SMTP server ---
+    let smtp_listener = TcpListener::bind(config.smtp_bind_address).await?;
+    let actual_addr = smtp_listener.local_addr()?;
     tracing::info!(
         listen_addr = %actual_addr,
         max_email_size_bytes = config.max_message_size,
-        connection_timeout_secs = config.connection_timeout.as_secs(),
-        max_concurrent_connections = ?config.max_concurrent_connections,
         "SMTP-to-ACS relay listening for connections"
     );
-
-    // In production, pass None for the shutdown signal (uses Ctrl+C/SIGTERM)
     run(
-        listener,
+        smtp_listener,
         mailer,
         config.max_message_size,
         actual_addr.ip().to_string(),
     )
     .await;
-
     tracing::info!("Server has shut down gracefully.");
     Ok(())
 }

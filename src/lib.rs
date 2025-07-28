@@ -1,9 +1,10 @@
 use anyhow::Result;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::signal;
-use tracing::{error, info, instrument, warn, Span};
+use tracing::{error, info, instrument, warn};
 
 pub mod config;
 pub mod error;
@@ -18,7 +19,7 @@ pub use metrics::MetricsCollector;
 use relay::Mailer;
 
 // Represents the state of a single SMTP transaction (one email).
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)] // Added Debug for easier logging
 struct Transaction {
     from: Option<String>,
     recipients: Vec<String>,
@@ -37,119 +38,137 @@ async fn write_response(
 }
 
 // Handles a single, complete client TCP connection, processing one or more SMTP transactions.
-#[instrument(skip_all, name = "handle_connection")]
+#[instrument(
+    skip_all,
+    name = "handle_connection",
+    fields(
+        peer_addr = %stream.peer_addr().map_or_else(|_| "unknown".to_string(), |a| a.to_string()),
+        conn_id = %nanoid::nanoid!(8)
+    )
+)]
 pub async fn handle_connection(
     stream: TcpStream,
     mailer: Arc<dyn Mailer>,
     max_email_size: usize,
     server_name: String,
 ) {
-    info!("handle_connection: START");
-    let peer_addr = stream
-        .peer_addr()
-        .map_or_else(|_| "unknown".to_string(), |a| a.to_string());
-    // Manually add the peer_addr to the current span for better logging context.
-    Span::current().record("peer_addr", peer_addr.as_str());
-
-    info!(client_addr = %peer_addr, "New client connection");
+    info!("New client connection");
     let (read_half, mut write_half) = io::split(stream);
     let mut reader = BufReader::new(read_half);
+    let mut line = String::new();
 
-    if write_response(&mut write_half, 220, "acs-smtp-relay ready")
+    if write_response(&mut write_half, 220, &format!("{server_name} ESMTP ready"))
         .await
         .is_err()
     {
-        info!("handle_connection: END (failed to send greeting)");
+        error!("Failed to send initial 220 response, closing connection.");
         return;
     }
 
-    let mut line = String::new();
     let mut transaction = Transaction::default();
-
     loop {
         line.clear();
         match reader.read_line(&mut line).await {
             Ok(0) => {
-                info!(client_addr = %peer_addr, "Client disconnected");
-                info!("handle_connection: END (client disconnected)");
+                info!("Client disconnected cleanly (EOF)");
                 return;
             }
             Ok(_) => {
                 let cmd = line.trim().to_uppercase();
+                tracing::debug!(raw_command = %line.trim(), "Received command");
 
-                if cmd.starts_with("HELO") {
-                    transaction = Transaction::default();
+                // RFC-compliant EHLO/HELO/AUTH/NOOP/RSET handling
+                if cmd.starts_with("EHLO") {
+                    let ehlo_response = format!(
+                        "250-{server_name}\r\n\
+250-AUTH PLAIN\r\n\
+250-SIZE {max_email_size}\r\n\
+250 HELP"
+                    );
+                    let response = format!("{ehlo_response}\r\n");
+                    if write_half.write_all(response.as_bytes()).await.is_err() {
+                        return;
+                    }
+                    info!(client_response = %ehlo_response.replace("\r\n", " | "), "Sent EHLO response");
+                } else if cmd.starts_with("HELO") {
                     if write_response(&mut write_half, 250, &server_name)
                         .await
                         .is_err()
                     {
                         return;
                     }
-                } else if cmd.starts_with("EHLO") {
-                    transaction = Transaction::default();
-                    let ehlo_response = format!("250-{server_name}\r\n250 AUTH PLAIN LOGIN\r\n");
-                    if write_half
-                        .write_all(ehlo_response.as_bytes())
-                        .await
-                        .is_err()
-                    {
-                        return;
-                    }
-                    info!(client_response = %ehlo_response.trim(), "Sent EHLO response");
                 } else if cmd.starts_with("AUTH") {
-                    if cmd == "AUTH PLAIN" {
-                        if write_response(&mut write_half, 334, "").await.is_err() {
-                            return;
+                    // SECURITY NOTE:
+                    // This SMTP server advertises and accepts AUTH PLAIN for compatibility with clients and RFC compliance.
+                    // However, it does NOT validate or check the provided credentials in any way.
+                    // Any username/password is accepted and the server always responds with 235 Authentication successful.
+                    // This is intentional: authentication and access control are expected to be enforced at the network level
+                    // (e.g., via Kubernetes NetworkPolicy, firewalls, or private VPC endpoints). Do NOT expose this server to untrusted networks.
+                    tracing::debug!("Handling AUTH command");
+                    if cmd.starts_with("AUTH PLAIN") {
+                        // Two-step: "AUTH PLAIN"
+                        if cmd == "AUTH PLAIN" {
+                            if write_response(&mut write_half, 334, "").await.is_err() {
+                                return;
+                            }
+                            line.clear();
+                            if reader.read_line(&mut line).await.is_err() {
+                                return;
+                            }
+                            tracing::debug!("Received AUTH PLAIN payload after challenge.");
                         }
-                        if reader.read_line(&mut line).await.is_err() {
-                            return;
-                        };
-                    }
-                    if write_response(&mut write_half, 235, "2.7.0 Authentication successful")
-                        .await
-                        .is_err()
-                    {
-                        return;
-                    }
-                } else if cmd.starts_with("MAIL FROM:") {
-                    transaction = Transaction::default();
-                    transaction.from = Some(line.trim()[10..].trim().to_string());
-                    if write_response(&mut write_half, 250, "OK").await.is_err() {
-                        return;
-                    }
-                } else if cmd.starts_with("RCPT TO:") {
-                    if transaction.from.is_none() {
-                        if write_response(&mut write_half, 503, "Bad sequence of commands")
+                        // For both one-step and two-step, accept the auth
+                        if write_response(&mut write_half, 235, "Authentication successful")
                             .await
                             .is_err()
                         {
                             return;
                         }
                     } else {
-                        transaction
-                            .recipients
-                            .push(line.trim()[8..].trim().to_string());
-                        if write_response(&mut write_half, 250, "OK").await.is_err() {
-                            return;
-                        }
-                    }
-                } else if cmd.starts_with("DATA") {
-                    if transaction.recipients.is_empty() {
-                        if write_response(&mut write_half, 503, "Bad sequence of commands")
+                        warn!(auth_command=%cmd, "Unsupported AUTH mechanism offered by client");
+                        if write_response(&mut write_half, 504, "Unsupported authentication type")
                             .await
                             .is_err()
                         {
                             return;
                         }
-                        continue;
                     }
-                    if write_response(
-                        &mut write_half,
-                        354,
-                        "Start mail input; end with <CRLF>.<CRLF>",
-                    )
-                    .await
-                    .is_err()
+                } else if cmd.starts_with("MAIL FROM:") {
+                    transaction = Transaction::default(); // Start new transaction
+                    let from_addr = line.trim()[10..].trim();
+                    transaction.from =
+                        Some(from_addr.trim_matches(|c| c == '<' || c == '>').to_string());
+                    tracing::debug!(?transaction, "Started new transaction");
+                    if write_response(&mut write_half, 250, "OK").await.is_err() {
+                        return;
+                    }
+                } else if cmd.starts_with("RCPT TO:") {
+                    if transaction.from.is_none() {
+                        warn!(?transaction, "RCPT TO received before MAIL FROM");
+                        let _ =
+                            write_response(&mut write_half, 503, "Bad sequence of commands").await;
+                        return;
+                    } else {
+                        let rcpt_addr = line.trim()[8..].trim();
+                        transaction
+                            .recipients
+                            .push(rcpt_addr.trim_matches(|c| c == '<' || c == '>').to_string());
+                        tracing::debug!(?transaction, "Added recipient");
+                        if write_response(&mut write_half, 250, "OK").await.is_err() {
+                            return;
+                        }
+                    }
+                } else if cmd == "DATA" {
+                    if transaction.from.is_none() || transaction.recipients.is_empty() {
+                        warn!(?transaction, "DATA received with incomplete transaction");
+                        let _ =
+                            write_response(&mut write_half, 503, "Bad sequence of commands").await;
+                        return;
+                    }
+
+                    if write_response(&mut write_half, 354, "End data with <CR><LF>.<CR><LF>")
+                        .await
+                        .is_err()
                     {
                         return;
                     }
@@ -157,18 +176,28 @@ pub async fn handle_connection(
                     let mut email_data = Vec::new();
                     loop {
                         let mut data_line = String::new();
-                        match reader.read_line(&mut data_line).await {
-                            Ok(0) => {
-                                info!(client_addr = %peer_addr, "Client disconnected during DATA");
+                        match tokio::time::timeout(
+                            Duration::from_secs(300),
+                            reader.read_line(&mut data_line),
+                        )
+                        .await
+                        {
+                            Ok(Ok(0)) => {
+                                info!("Client disconnected during DATA");
                                 return;
                             }
-                            Ok(_) => {
+                            Ok(Ok(_)) => {
                                 if email_data.len() + data_line.len() > max_email_size {
-                                    error!(client_addr = %peer_addr, size = email_data.len(), max_size = max_email_size, "Email size exceeds maximum limit");
+                                    error!(
+                                        size = email_data.len(),
+                                        max_size = max_email_size,
+                                        "Email size exceeds maximum limit"
+                                    );
                                     let _ = write_response(&mut write_half, 552, "Requested mail action aborted: exceeded storage allocation").await;
-                                    return;
+                                    return; // Abort connection on oversize
                                 }
                                 if data_line == ".\r\n" {
+                                    tracing::debug!("End of DATA marker found");
                                     break;
                                 }
                                 let line_to_write =
@@ -179,19 +208,40 @@ pub async fn handle_connection(
                                     };
                                 email_data.extend_from_slice(line_to_write.as_bytes());
                             }
-                            Err(e) => {
-                                error!(client_addr = %peer_addr, error = ?e, "Error reading email data");
+                            Ok(Err(e)) => {
+                                error!(error = ?e, "Error reading email data");
+                                return;
+                            }
+                            Err(_) => {
+                                warn!("Timeout while reading email data");
                                 return;
                             }
                         }
                     }
 
-                    info!(client_addr = %peer_addr, email_size = email_data.len(), "Received email data. Relaying...");
+                    tracing::debug!(
+                        email_size = email_data.len(),
+                        "Finished receiving email data. Relaying..."
+                    );
+
+                    let parsed_email = mail_parser::MessageParser::default().parse(&email_data);
+                    let subject = parsed_email
+                        .as_ref()
+                        .and_then(|p| p.subject())
+                        .unwrap_or("N/A");
+                    let message_id = parsed_email
+                        .as_ref()
+                        .and_then(|p| p.message_id())
+                        .unwrap_or("N/A");
+
+                    info!(email_size = email_data.len(), %subject, %message_id, "Received email data. Relaying...");
+
                     match mailer
                         .send(&email_data, &transaction.recipients, &transaction.from)
                         .await
                     {
                         Ok(_) => {
+                            info!(%subject, %message_id, "Successfully relayed email");
                             if write_response(&mut write_half, 250, "OK: Queued for delivery")
                                 .await
                                 .is_err()
@@ -200,11 +250,11 @@ pub async fn handle_connection(
                             }
                         }
                         Err(e) => {
-                            error!(client_addr = %peer_addr, error = ?e, "Failed to relay email");
+                            error!(error = ?e, %subject, %message_id, "Failed to relay email");
                             if write_response(
                                 &mut write_half,
                                 451,
-                                "Requested action aborted: local error in processing",
+                                "Failed to relay email to Azure Communication Services",
                             )
                             .await
                             .is_err()
@@ -213,17 +263,22 @@ pub async fn handle_connection(
                             }
                         }
                     }
-                    transaction = Transaction::default();
-                } else if cmd.starts_with("QUIT") {
+                    transaction = Transaction::default(); // Reset for next email
+                } else if cmd == "QUIT" {
+                    tracing::debug!("Client sent QUIT");
                     let _ = write_response(&mut write_half, 221, "Bye").await;
-                    return;
-                } else if cmd.starts_with("RSET") {
+                    return; // Close the connection
+                } else if cmd == "NOOP" {
+                    if write_response(&mut write_half, 250, "OK").await.is_err() {
+                        return;
+                    }
+                } else if cmd == "RSET" {
                     transaction = Transaction::default();
                     if write_response(&mut write_half, 250, "OK").await.is_err() {
                         return;
                     }
                 } else {
-                    warn!(client_addr = %peer_addr, command = %line.trim(), "Unrecognized command");
+                    warn!(command = %line.trim(), "Unrecognized command");
                     if write_response(&mut write_half, 500, "Syntax error, command unrecognized")
                         .await
                         .is_err()
@@ -232,14 +287,16 @@ pub async fn handle_connection(
                     }
                 }
             }
+            Err(e) if e.kind() == io::ErrorKind::ConnectionReset => {
+                warn!(error = ?e, "Client reset connection");
+                return;
+            }
             Err(e) => {
-                error!(client_addr = %peer_addr, error = ?e, "Error reading from client");
-                info!("handle_connection: END (error)");
+                error!(error = ?e, "Error reading from client");
                 return;
             }
         }
     }
-    // info!("handle_connection: END (loop exit)"); // unreachable
 }
 
 // Listens for graceful shutdown signals (Ctrl+C, SIGTERM).
@@ -362,8 +419,7 @@ mod tests {
         let response = String::from_utf8_lossy(&buf[..n]);
         assert!(
             response.contains("552"),
-            "Expected 552 error, got: {}",
-            response
+            "Expected 552 error, got: {response}"
         );
     }
 
@@ -421,7 +477,7 @@ mod tests {
         let _ = stream.read(&mut buf).await.unwrap();
         // Check that the DummyMailer received the correct 'from' argument
         let from_value = last_from.lock().unwrap().clone();
-        assert_eq!(from_value, Some(Some("<from@example.com>".to_string())));
+        assert_eq!(from_value, Some(Some("from@example.com".to_string())));
     }
 
     #[test]
@@ -515,7 +571,7 @@ mod tests {
         let _ = stream.read(&mut buf).await.unwrap();
         // Collect logs
         let logs: Vec<String> = rx.try_iter().collect();
-        let found = logs.iter().any(|log| log.contains("client_addr"));
-        assert!(found, "Expected client_addr in logs, got: {:?}", logs);
+        let found = logs.iter().any(|log| log.contains("peer_addr"));
+        assert!(found, "Expected peer_addr in logs, got: {logs:?}");
     }
 }

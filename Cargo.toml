@@ -16,7 +16,7 @@ path = "src/main.rs"
 
 [dependencies]
 # Async runtime
-tokio = { version = "1.38", features = ["full"] }
+tokio = { version = "1.47.0", features = ["full"] }
 
 # Error Handling & Logging
 anyhow = "1.0"
@@ -26,7 +26,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 # HTTP client for ACS REST API
 reqwest = { version = "0.12", features = ["json"] }
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde_json = "1.0.141"
 
 # Email Parsing
 mail-parser = "0.11.0"
@@ -42,6 +42,9 @@ sha2 = "0.10"
 
 # URL parsing and validation
 url = "2.5"
+
+# For unique connection IDs
+nanoid = "0.4"
 
 # Optional health check server
 warp = { version = "0.3", optional = true }
