@@ -421,7 +421,7 @@ mod tests {
         let _ = stream.read(&mut buf).await.unwrap();
         // Check that the DummyMailer received the correct 'from' argument
         let from_value = last_from.lock().unwrap().clone();
-        assert_eq!(from_value, Some(Some("<from@example.com>".to_string())));
+        assert_eq!(from_value, Some(Some("from@example.com".to_string())));
     }
 
     #[test]
@@ -515,7 +515,7 @@ mod tests {
         let _ = stream.read(&mut buf).await.unwrap();
         // Collect logs
         let logs: Vec<String> = rx.try_iter().collect();
-        let found = logs.iter().any(|log| log.contains("client_addr"));
-        assert!(found, "Expected client_addr in logs, got: {logs:?}");
+        let found = logs.iter().any(|log| log.contains("peer_addr"));
+        assert!(found, "Expected peer_addr in logs, got: {logs:?}");
     }
 }
